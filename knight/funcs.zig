@@ -1,3 +1,4 @@
+const std = @import("std");
 const Value = @import("value.zig").Value;
 const Error = @import("error.zig").Error;
 
@@ -10,17 +11,26 @@ pub const Function = struct {
 };
 
 pub const Block = struct {
-    idx: usize,
-    // func: *const Function,
-    // args: [max_arity]Value,
+    refcount: usize = 1,
+    func: *const Function,
+    args: [max_arity]Value,
+
+    pub fn increment(block: *Block) void {
+        block.refcount += 1;
+    }
+
+    pub fn decrement(block: *Block, alloc: std.mem.Allocator) void {
+        block.refcount -= 1;
+        _ = alloc;
+    }
 };
 
 test "value can create a block" {
-    const b = Block{ .func = undefined, .args = undefined };
-    const v = Value{ .block = b };
+    // const b = Block{ .func = undefined, .args = undefined };
+    // const v = Value{ .block = b };
 
-    switch (v) {
-        .block => {},
-        else => failure(),
-    }
+    // switch (v) {
+    //     .block => {},
+    //     else => failure(),
+    // }
 }

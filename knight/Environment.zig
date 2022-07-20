@@ -2,6 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Error = @import("error.zig").Error;
+const Interner = @import("string.zig").Interner;
+
+const Environment = @This();
 
 /// A variable within Knight; each unique identifier has a `Variable` associated with it.
 ///
@@ -10,9 +13,10 @@ const Error = @import("error.zig").Error;
 pub const Variable = struct {
     /// The name of the variable. This value is merely borrowed; `Environment.variables` owns it.
     name: []const u8,
+
     /// The value of the `Variable`. You shouldn't directly access this, instead replace it with
     /// `Variable.assign` and access it with `Variable.fetch`.
-    value: ?Value,
+    value: Value = Value.@"undefined",
 
     /// Associates `value` with `variable`, deinitializing the previous value (if any).
     pub fn assign(variable: *Variable, allocator: Allocator, value: Value) void {
@@ -23,27 +27,31 @@ pub const Variable = struct {
     /// Access the last `Value` that was `.assign`ed to `variable`, returning an `Error` if
     /// `variable` has yet to be assigned.
     pub fn fetch(variable: *const Variable) Error!Value {
-        return (variable.value orelse return Error.UndefinedVariable).clone();
+        if (variable.value.isUndefined()) {
+            return Error.UndefinedVariable;
+        }
+
+        variable.value.increment();
+        return variable.value;
     }
 
     fn deinit(variable: *Variable, allocator: Allocator) void {
-        if (variable.value) |old| {
-            old.free(allocator);
+        if (variable.value != Value.@"undefined") {
+            variable.value.decrement(allocator);
         }
     }
 };
-
-pub const Environment = @This();
 
 // The variables for the environment. Note that it's a pointer to a `Variable`, and not a
 // variable directly, as pointers to variables are needed for `Value`, and resizing `variables`
 // when new values are added may invalidate old pointers.
 variables: std.StringHashMapUnmanaged(*Variable),
-allocator: Allocator, // NB. It's separate in case I add a string interner in the future.
+interner: Interner,
+allocator: Allocator,
 
 /// Creates a new `Environment` with the given allocator.
 pub fn init(allocator: Allocator) Environment {
-    return .{ .variables = .{}, .allocator = allocator };
+    return .{ .variables = .{}, .interner = .{}, .allocator = allocator };
 }
 
 const FetchOwnership = enum { Owned, Borrowed };
@@ -65,7 +73,7 @@ pub fn fetch(
             entry.key_ptr.* = try env.allocator.dupe(u8, name);
         }
         entry.value_ptr.* = try env.allocator.create(Variable);
-        entry.value_ptr.*.* = .{ .name = entry.key_ptr.*, .value = null };
+        entry.value_ptr.*.* = .{ .name = entry.key_ptr.* };
     } else if (owned == .Owned) {
         // If a variable with `name` already existed, then we need to get rid of the owned name.
         env.allocator.free(name);
@@ -116,15 +124,16 @@ test "variable fetching works" {
     try expectEqualStrings(v1.name, "hello");
     try expectError(Error.UndefinedVariable, v1.fetch());
 
-    v1.assign(env.allocator, .{ .boolean = true });
+    v1.assign(env.allocator, Value.@"true");
     try expectEqualStrings(v1.name, "hello");
-    try expectEqual(try v1.fetch(), .{ .boolean = true });
+    try expectEqual(try v1.fetch(), Value.@"true");
     try expectError(Error.UndefinedVariable, v2.fetch());
 
-    (try env.fetch(.Borrowed, "world")).assign(env.allocator, .{ .integer = 34 });
+    const Integer = @import("value.zig").Integer;
+    (try env.fetch(.Borrowed, "world")).assign(env.allocator, Value.init(Integer, 34));
     try expectEqualStrings(v2.name, "world");
-    try expectEqual(try v1.fetch(), .{ .boolean = true });
-    try expectEqual(try v2.fetch(), .{ .integer = 34 });
+    try expectEqual(try v1.fetch(), Value.@"true");
+    try expectEqual(try v2.fetch(), Value.init(Integer, 34));
 
     env.deinit();
 }
