@@ -1,6 +1,7 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
 const Error = @import("error.zig").Error;
+const Environment = @import("Environment.zig");
 
 pub const max_arity: usize = 4;
 
@@ -14,6 +15,12 @@ pub const Block = struct {
     refcount: usize = 1,
     func: *const Function,
     args: [max_arity]Value,
+
+    pub fn run(block: *const Block, env: *Environment) Error!Value {
+        _ = block;
+        _ = env;
+        @panic("todo");
+    }
 
     pub fn increment(block: *Block) void {
         block.refcount += 1;

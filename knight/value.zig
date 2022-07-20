@@ -106,6 +106,37 @@ pub const Value = enum(u64) {
     /// create a circular dependency. Instead, it's an associated constant.
     pub const one = Tag.integer.create(1 << Tag.shift);
 
+    // pub const Category = union(enum) {
+    //     @"null",
+    //     boolean: bool,
+    //     integer: Integer,
+    //     string: *String,
+    //     variable: *Variable,
+    //     block: *Block,
+    // }
+
+    // pub fn categorize(value: Value) Category {
+    //     return switch (value.tag()) {
+    //         .constant => switch (value) {
+    //             Value.@"true" => Category{.boolean = true},
+    //             Value.@"false" => String.MaybeIntegerString{ .string = &strings.false_string },
+    //             Value.@"null" => String.MaybeIntegerString{ .string = &strings.null_string },
+    //             else => unreachable,
+    //         },
+    //         .integer => switch (value) {
+    //             Value.zero => String.MaybeIntegerString{ .string = &strings.zero_string },
+    //             Value.one => String.MaybeIntegerString{ .string = &strings.one_string },
+    //             else => String.MaybeIntegerString.integerSlice(value.castUnchecked(Integer)),
+    //         },
+    //         .string => blk: {
+    //             var string = value.castUnchecked(*String);
+    //             string.increment();
+    //             break :blk .{ .string = string };
+    //         },
+    //         else => Error.InvalidConversion,
+    //     };
+    // }
+
     fn bits(value: Value) meta.Tag(Value) {
         return @enumToInt(value);
     }
@@ -190,6 +221,18 @@ pub const Value = enum(u64) {
         }
     }
 
+    pub fn run(value: Value, env: *Environment) Error!Value {
+        return switch (value.tag()) {
+            .constant, .integer => value,
+            .string => blk: {
+                value.castUnchecked(*String).increment();
+                break :blk value;
+            },
+            .variable => value.castUnchecked(*Variable).fetch(),
+            .block => value.castUnchecked(*Block).run(env),
+        };
+    }
+
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
     pub fn toInt(value: Value) Error!Integer {
@@ -220,7 +263,7 @@ pub const Value = enum(u64) {
 
     /// Converts `value` to an `*String`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
-    pub fn toStr(value: Value, intern: *String.Interner) Error!*String {
+    pub fn toStr(value: Value) Error!String.MaybeIntegerString {
         assert(!value.isUndefined());
 
         const strings = struct {
@@ -229,34 +272,42 @@ pub const Value = enum(u64) {
             var null_string = String.noFree("null");
             var zero_string = String.noFree("0");
             var one_string = String.noFree("1");
-            var buf = String{ .kind = .{ .embed = undefined } };
         };
 
         return switch (value.tag()) {
             .constant => switch (value) {
-                Value.@"true" => &strings.true_string,
-                Value.@"false" => &strings.false_string,
-                Value.@"null" => &strings.null_string,
+                Value.@"true" => String.MaybeIntegerString{ .string = &strings.true_string },
+                Value.@"false" => String.MaybeIntegerString{ .string = &strings.false_string },
+                Value.@"null" => String.MaybeIntegerString{ .string = &strings.null_string },
                 else => unreachable,
             },
             .integer => switch (value) {
-                Value.zero => &strings.zero_string,
-                Value.one => &strings.one_string,
-                else => blk: {
-                    // intern.stringFor()
-                    // const int = value.cast(Integer);
-                    // value.cast(Integer) != 0
-                    // _ = int;
-                    @panic("Todo, special 'number string'.");
-                },
+                Value.zero => String.MaybeIntegerString{ .string = &strings.zero_string },
+                Value.one => String.MaybeIntegerString{ .string = &strings.one_string },
+                else => String.MaybeIntegerString.integerSlice(value.castUnchecked(Integer)),
             },
             .string => blk: {
                 var string = value.castUnchecked(*String);
                 string.increment();
-                break :blk string;
+                break :blk .{ .string = string };
             },
             else => Error.InvalidConversion,
         };
+    }
+
+    pub fn dump(value: Value, writer: anytype) !void {
+        switch (value.tag()) {
+            .constant => switch (value) {
+                Value.@"true" => try writer.print("Boolean(true)", .{}),
+                Value.@"false" => try writer.print("Boolean(false)", .{}),
+                Value.@"null" => try writer.print("Null()", .{}),
+                else => unreachable,
+            },
+            .integer => try writer.print("Integer({d})", .{value.castUnchecked(Integer)}),
+            .string => try writer.print("String({s})", .{value.castUnchecked(*String).slice()}),
+            .variable => try writer.print("Variable({s})", .{value.castUnchecked(*Variable).name}),
+            .block => try writer.print("Block({c})", .{value.castUnchecked(*Block).func.name}),
+        }
     }
 };
 
@@ -315,7 +366,7 @@ test "bitmasking string values" {
     const greeting = "Hello, world!";
     const string = Value.init(*String, &String.noFree(greeting));
     try expect(string.is(*String));
-    try std.testing.expectEqualStrings(greeting, (try string.cast(*String)).asSlice());
+    try std.testing.expectEqualStrings(greeting, (try string.cast(*String)).slice());
 
     try expect(!string.is(Integer));
     try expect(!string.is(bool));
@@ -398,21 +449,30 @@ test "to bool conversions" {
 }
 
 test "to string conversions" {
-    try expectEqualStrings("0", (try Value.zero.toStr()).asSlice());
-    try expectEqualStrings("1", (try Value.one.toStr()).asSlice());
-    // TODO: to string conversions for integers
-    // try expectEqual(true, try Value.init(Integer, 34).toBool());
-    // try expectEqual(true, try Value.init(Integer, -4_531_681).toBool());
+    const min_int = std.math.minInt(Integer);
+    const max_int = std.math.maxInt(Integer);
+    try expectEqualStrings("0", (try Value.zero.toStr()).slice());
+    try expectEqualStrings("1", (try Value.one.toStr()).slice());
+    try expectEqualStrings("34", (try Value.init(Integer, 34).toStr()).slice());
+    try expectEqualStrings("-4531681", (try Value.init(Integer, -4_531_681).toStr()).slice());
+    try expectEqualStrings(
+        std.fmt.comptimePrint("{d}", .{min_int}),
+        (try Value.init(Integer, min_int).toStr()).slice(),
+    );
+    try expectEqualStrings(
+        std.fmt.comptimePrint("{d}", .{max_int}),
+        (try Value.init(Integer, max_int).toStr()).slice(),
+    );
 
-    try expectEqualStrings("true", (try Value.@"true".toStr()).asSlice());
-    try expectEqualStrings("false", (try Value.@"false".toStr()).asSlice());
-    try expectEqualStrings("null", (try Value.@"null".toStr()).asSlice());
+    try expectEqualStrings("true", (try Value.@"true".toStr()).slice());
+    try expectEqualStrings("false", (try Value.@"false".toStr()).slice());
+    try expectEqualStrings("null", (try Value.@"null".toStr()).slice());
 
-    try expectEqualStrings("", (try Value.init(*String, &String.noFree("")).toStr()).asSlice());
-    try expectEqualStrings("0", (try Value.init(*String, &String.noFree("0")).toStr()).asSlice());
-    try expectEqualStrings("false", (try Value.init(*String, &String.noFree("false")).toStr()).asSlice());
-    try expectEqualStrings(" ", (try Value.init(*String, &String.noFree(" ")).toStr()).asSlice());
-    try expectEqualStrings("foo bar", (try Value.init(*String, &String.noFree("foo bar")).toStr()).asSlice());
+    try expectEqualStrings("", (try Value.init(*String, &String.noFree("")).toStr()).slice());
+    try expectEqualStrings("0", (try Value.init(*String, &String.noFree("0")).toStr()).slice());
+    try expectEqualStrings("false", (try Value.init(*String, &String.noFree("false")).toStr()).slice());
+    try expectEqualStrings(" ", (try Value.init(*String, &String.noFree(" ")).toStr()).slice());
+    try expectEqualStrings("foo bar", (try Value.init(*String, &String.noFree("foo bar")).toStr()).slice());
 
     var env = Environment.init(testing_allocator);
     defer env.deinit();
@@ -426,7 +486,7 @@ test "to string conversions" {
     // make sure it increases the refcount
     var s = String.owned(try testing_allocator.dupe(u8, "Hello, world!"));
     try expectEqual(@as(usize, 1), s.refcount);
-    try expectEqualStrings("Hello, world!", (try Value.init(*String, &s).toStr()).asSlice());
+    try expectEqualStrings("Hello, world!", (try Value.init(*String, &s).toStr()).slice());
     try expectEqual(@as(usize, 2), s.refcount);
 
     s.decrement();

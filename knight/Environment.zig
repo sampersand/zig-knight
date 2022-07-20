@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Error = @import("error.zig").Error;
-const Interner = @import("string.zig").Interner;
+const Interner = @import("String.zig").Interner;
 
 const Environment = @This();
 

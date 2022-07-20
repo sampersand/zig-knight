@@ -47,29 +47,29 @@ kind: union(enum) {
 const empty = String.nofree("");
 
 /// Create a new `String` which will never be freed.
-pub fn noFree(slice: []const u8) String {
-    return .{ .refcount = undefined, .kind = .{ .nofree = slice } };
+pub fn noFree(str: []const u8) String {
+    return .{ .refcount = undefined, .kind = .{ .nofree = str } };
 }
 
-/// Initializes a pre-allocated noFree `String` with `slice`.
-pub fn initNoFree(string: *String, slice: []const u8) void {
-    string.* = noFree(slice);
+/// Initializes a pre-allocated noFree `String` with `str`.
+pub fn initNoFree(string: *String, str: []const u8) void {
+    string.* = noFree(str);
 }
 
 /// Creates a new owned `String`.
-pub fn owned(slice: []u8) String {
-    return .{ .kind = .{ .owned = slice } };
+pub fn owned(str: []u8) String {
+    return .{ .kind = .{ .owned = str } };
 }
 
-/// Initializes `string` with the owned slice `slice`.
-pub fn initOwned(string: *String, slice: []u8) void {
-    string.* = owned(slice);
+/// Initializes `string` with the owned `str`.
+pub fn initOwned(string: *String, str: []u8) void {
+    string.* = owned(str);
 }
 
-/// Initializes a string, and copies the `slice` over to it.
-pub fn initBorrowed(string: *String, alloc: Allocator, slice: []const u8) !void {
-    try string.init(alloc, slice.len);
-    std.mem.copy(u8, string.asMutableSlice(), slice);
+/// Initializes a string, and copies the `str` over to it.
+pub fn initBorrowed(string: *String, alloc: Allocator, str: []const u8) !void {
+    try string.init(alloc, str.len);
+    std.mem.copy(u8, string.asMutableSlice(), str);
 }
 
 /// Initializes `string` as a String with enough space to store `capacity` bytes.
@@ -138,7 +138,7 @@ pub fn decrement(string: *String) void {
 
 /// Gets the length of the string, in bytes.
 pub fn len(string: *const String) usize {
-    return string.asSlice().len;
+    return string.slice().len;
 }
 
 /// Returns `string` as a mutable slice.
@@ -156,7 +156,7 @@ pub fn asMutableSlice(string: *String) []u8 {
 }
 
 /// Gets an immutable slice of the underlying data.
-pub fn asSlice(string: *const String) []const u8 {
+pub fn slice(string: *const String) []const u8 {
     return switch (string.kind) {
         .embed => |*e| e.data[0..e.len],
         .nofree => |n| n,
@@ -169,26 +169,26 @@ pub fn asSlice(string: *const String) []const u8 {
 ///
 /// In essence, convert capture group 1 to an int from regex `/^\s*([-+]?\d+)/`
 pub fn parseInt(string: *const String) Integer {
-    var slice = string.asSlice();
+    var str = string.slice();
 
     // Strip leading whitespace
-    while (slice.len != 0 and std.ascii.isSpace(slice[0])) {
-        slice = slice[1..];
+    while (str.len != 0 and std.ascii.isSpace(str[0])) {
+        str = str[1..];
     }
 
     // If it was only whitespace, we're done.
-    if (slice.len == 0) return 0;
+    if (str.len == 0) return 0;
 
     // Find the first non-digit character, sans leading `-` or `+`.
     var end = @as(usize, 0);
-    if (slice[0] == '-' or slice[0] == '+') end = 1;
-    while (end < slice.len and std.ascii.isDigit(slice[end])) : (end += 1) {}
+    if (str[0] == '-' or str[0] == '+') end = 1;
+    while (end < str.len and std.ascii.isDigit(str[end])) : (end += 1) {}
 
     // Strip off the rest of non-ascii characters
-    slice.len = end;
+    str.len = end;
 
     // Parse the string, or if there's an error, it's zero
-    return std.fmt.parseInt(Integer, slice, 10) catch 0;
+    return std.fmt.parseInt(Integer, str, 10) catch 0;
 }
 
 // // Get a reference to the original owner. Either `b.owner` for substring strings, else `string`.
@@ -215,7 +215,7 @@ pub fn parseInt(string: *const String) Integer {
 
 //     return String{ .kind = .{
 //         .borrowed = .{
-//             .slice = string.asSlice()[start .. start + amnt],
+//             .slice = string.slice()[start .. start + amnt],
 //             .owner = string,
 //         },
 //     } };
@@ -233,16 +233,16 @@ test "nofree strings" {
         string.decrement();
         string.deinit(undefined);
     }
-    try expectEqualStrings("hello, world", string.asSlice());
+    try expectEqualStrings("hello, world", string.slice());
 
     // Ensure `initNoFree` and just a `deinit` works.
     var string2: String = undefined;
     string2.initNoFree("nofree string");
     defer string2.deinit(undefined);
-    try expectEqualStrings("nofree string", string2.asSlice());
+    try expectEqualStrings("nofree string", string2.slice());
 
     // Ensrue that an empty string, and no `deinit` works.
-    try expectEqualStrings("", String.noFree("").asSlice()); // ensure no deinit is needed.
+    try expectEqualStrings("", String.noFree("").slice()); // ensure no deinit is needed.
 }
 
 test "owned strings" {
@@ -252,7 +252,7 @@ test "owned strings" {
         string.decrement();
         string.deinit(testing_allocator);
     }
-    try expectEqualStrings("owned string", string.asSlice());
+    try expectEqualStrings("owned string", string.slice());
 
     // Test `.initOwned`
     var string2: String = undefined;
@@ -261,7 +261,7 @@ test "owned strings" {
         string2.decrement();
         string2.deinit(testing_allocator);
     }
-    try expectEqualStrings("salutations, friend!", string2.asSlice());
+    try expectEqualStrings("salutations, friend!", string2.slice());
     // TODO: mtuable slice
 }
 
@@ -273,7 +273,7 @@ test "borrowed strings" {
         string.decrement();
         string.deinit(testing_allocator);
     }
-    try expectEqualStrings("greetings", string.asSlice());
+    try expectEqualStrings("greetings", string.slice());
 
     // Test `.initBorrowed` with large strings
     var string2: String = undefined;
@@ -282,7 +282,7 @@ test "borrowed strings" {
         string2.decrement();
         string2.deinit(testing_allocator);
     }
-    try expectEqualStrings("greetings" ** max_embed_length, string2.asSlice());
+    try expectEqualStrings("greetings" ** max_embed_length, string2.slice());
 }
 
 test "toInt conforms to spec" {
@@ -309,11 +309,11 @@ pub const Interner = struct {
     strings: std.StringHashMapUnmanaged(String) = .{},
 
     // note that `s` should always be borrowed.
-    pub fn fetch(interner: *Interner, alloc: Allocator, slice: []const u8) Allocator.Error!*String {
+    pub fn fetch(interner: *Interner, alloc: Allocator, str: []const u8) Allocator.Error!*String {
         // TODO
         _ = interner;
         var s = try alloc.create(String);
-        try s.initBorrowed(alloc, slice);
+        try s.initBorrowed(alloc, str);
         return s;
     }
 
@@ -324,9 +324,27 @@ pub const Interner = struct {
     // return s;
 };
 
-// pub const MaybeIntegerString = union(enum) {
-//     normal: *String,
-//     buf: []u8,
+pub const MaybeIntegerString = union(enum) {
+    string: *String,
+    integer: std.BoundedArray(u8, std.fmt.count("{d}", .{std.math.minInt(Integer)})),
 
-//     pub fn
-// };
+    pub fn toString(string: *MaybeIntegerString, alloc: Allocator, interner: *Interner) !*String {
+        return switch (string.*) {
+            .string => |s| s,
+            .integer => |b| interner.fetch(alloc, b.slice()),
+        };
+    }
+
+    pub fn slice(string: *MaybeIntegerString) []const u8 {
+        return switch (string.*) {
+            .string => |s| s.slice(),
+            .integer => |*b| b.slice(),
+        };
+    }
+
+    pub fn integerSlice(integer: Integer) MaybeIntegerString {
+        var string = MaybeIntegerString{ .integer = .{} };
+        string.integer.writer().print("{d}", .{integer}) catch unreachable;
+        return string;
+    }
+};
