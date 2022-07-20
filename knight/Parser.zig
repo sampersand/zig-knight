@@ -183,15 +183,15 @@ test "parses strings" {
 
     var @"a\"" = try parser.next(&env);
     defer @"a\"".decrement(env.allocator);
-    try expectEqualStrings("a\"", (try @"a\"".cast(*String)).asSlice());
+    try expectEqualStrings("a\"", (try @"a\"".cast(*String)).slice());
 
     var b = try parser.next(&env);
     defer b.decrement(env.allocator);
-    try expectEqualStrings("b", (try b.cast(*String)).asSlice());
+    try expectEqualStrings("b", (try b.cast(*String)).slice());
 
     var @"'c\\" = try parser.next(&env);
     defer @"'c\\".decrement(env.allocator);
-    try expectEqualStrings("'c\\", (try @"'c\\".cast(*String)).asSlice());
+    try expectEqualStrings("'c\\", (try @"'c\\".cast(*String)).slice());
 
     try expectEqual(Value.init(value.Integer, 123), try parser.next(&env));
 }

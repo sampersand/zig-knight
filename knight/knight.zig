@@ -14,10 +14,7 @@ pub fn play(source: []const u8, env: *Environment) Error!Value {
 }
 
 test "assign a variable after fetching" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    var env = Environment.init(arena.allocator());
+    var env = Environment.init(std.testing.allocator);
     defer env.deinit();
 
     var program = try play("abc", &env);
