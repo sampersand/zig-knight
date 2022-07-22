@@ -7,7 +7,7 @@ const Error = @import("error.zig").Error;
 const String = @import("String.zig");
 const Environment = @import("Environment.zig");
 const Variable = Environment.Variable;
-const Block = @import("funcs.zig").Block;
+const Block = @import("Function.zig").Block;
 
 /// An Integer within Knight. This is specially sized to make use of point tagging.
 pub const Integer = meta.Int(.signed, @bitSizeOf(Value) - @bitSizeOf(Tag));
@@ -20,7 +20,7 @@ pub const Null = struct {};
 pub const ptr_align = 8;
 
 /// The tag of a `Value`. Used to indicate the type of a value.
-const Tag = enum {
+pub const Tag = enum {
     const tag_size = std.math.log2(ptr_align);
     const shift = tag_size;
 
@@ -106,36 +106,29 @@ pub const Value = enum(u64) {
     /// create a circular dependency. Instead, it's an associated constant.
     pub const one = Tag.integer.create(1 << Tag.shift);
 
-    // pub const Category = union(enum) {
-    //     @"null",
-    //     boolean: bool,
-    //     integer: Integer,
-    //     string: *String,
-    //     variable: *Variable,
-    //     block: *Block,
-    // }
+    pub const Classification = union(enum) {
+        @"null",
+        boolean: bool,
+        integer: Integer,
+        string: *String,
+        variable: *Variable,
+        block: *Block,
+    };
 
-    // pub fn categorize(value: Value) Category {
-    //     return switch (value.tag()) {
-    //         .constant => switch (value) {
-    //             Value.@"true" => Category{.boolean = true},
-    //             Value.@"false" => String.MaybeIntegerString{ .string = &strings.false_string },
-    //             Value.@"null" => String.MaybeIntegerString{ .string = &strings.null_string },
-    //             else => unreachable,
-    //         },
-    //         .integer => switch (value) {
-    //             Value.zero => String.MaybeIntegerString{ .string = &strings.zero_string },
-    //             Value.one => String.MaybeIntegerString{ .string = &strings.one_string },
-    //             else => String.MaybeIntegerString.integerSlice(value.castUnchecked(Integer)),
-    //         },
-    //         .string => blk: {
-    //             var string = value.castUnchecked(*String);
-    //             string.increment();
-    //             break :blk .{ .string = string };
-    //         },
-    //         else => Error.InvalidConversion,
-    //     };
-    // }
+    pub fn classify(value: Value) Classification {
+        return switch (value.tag()) {
+            .constant => switch (value) {
+                Value.@"true" => Classification{ .boolean = true },
+                Value.@"false" => Classification{ .boolean = false },
+                Value.@"null" => Classification{ .@"null" = {} },
+                else => unreachable,
+            },
+            .integer => .{ .integer = value.cast(Integer).? },
+            .string => .{ .string = value.cast(*String).? },
+            .variable => .{ .variable = value.cast(*Variable).? },
+            .block => .{ .block = value.cast(*Block).? },
+        };
+    }
 
     fn bits(value: Value) meta.Tag(Value) {
         return @enumToInt(value);
@@ -145,7 +138,7 @@ pub const Value = enum(u64) {
         return value.bits() & ~@as(meta.Tag(Value), (1 << Tag.shift) - 1);
     }
 
-    fn tag(value: Value) Tag {
+    pub fn tag(value: Value) Tag {
         return @intToEnum(Tag, @truncate(meta.Tag(Tag), value.bits()));
     }
 
@@ -178,14 +171,9 @@ pub const Value = enum(u64) {
         };
     }
 
-    /// Unwraps a `value` of type `T`; if `value` isn't a `T`, an `InvalidCast` is returned.
-    pub fn cast(value: Value, comptime T: type) error{InvalidCast}!T {
-        return if (value.is(T)) value.castUnchecked(T) else error.InvalidCast;
-    }
-
-    /// Casts `value` to `T`, without validating that `value` is a `T`.
-    pub fn castUnchecked(value: Value, comptime T: type) T {
-        assert(value.is(T));
+    /// Unwraps a `value` of type `T`; if `value` isn't a `T`, a `null` is returned.
+    pub fn cast(value: Value, comptime T: type) ?T {
+        if (!value.is(T)) return null;
 
         return switch (T) {
             Integer => @intCast(
@@ -204,8 +192,8 @@ pub const Value = enum(u64) {
         assert(!value.isUndefined());
 
         switch (value.tag()) {
-            .string => value.castUnchecked(*String).increment(),
-            .block => value.castUnchecked(*Block).increment(),
+            .string => value.cast(*String).?.increment(),
+            .block => value.cast(*Block).?.increment(),
             else => {},
         }
     }
@@ -215,23 +203,57 @@ pub const Value = enum(u64) {
         assert(!value.isUndefined());
 
         switch (value.tag()) {
-            .string => value.castUnchecked(*String).decrement(),
-            .block => value.castUnchecked(*Block).decrement(alloc),
+            .string => value.cast(*String).?.decrement(),
+            .block => value.cast(*Block).?.decrement(alloc),
             else => {},
         }
     }
 
+    /// Executes the `value`.
+    ///
+    /// For booleans, strings, null, and integers, it simply returns the value unchanged. For
+    /// variables, it fetches the last assigned value for the variable. And for blocks, it executes
+    /// the block.
     pub fn run(value: Value, env: *Environment) Error!Value {
         return switch (value.tag()) {
             .constant, .integer => value,
             .string => blk: {
-                value.castUnchecked(*String).increment();
+                value.cast(*String).?.increment();
                 break :blk value;
             },
-            .variable => value.castUnchecked(*Variable).fetch(),
-            .block => value.castUnchecked(*Block).run(env),
+            .variable => value.cast(*Variable).?.fetch(),
+            .block => value.cast(*Block).?.run(env),
         };
     }
+
+    pub fn runToInt(value: Value, env: *Environment) Error!Integer {
+        const ran = try value.run(env);
+        if (ran.cast(Integer)) |integer| return integer;
+
+        defer ran.decrement(env.allocator);
+        return ran.toInt();
+    }
+
+    /// Convenience wrapper around `(try value.run(env)).toBool()`.
+    pub fn runToBool(value: Value, env: *Environment) Error!bool {
+        const ran = try value.run(env);
+        if (ran.cast(bool)) |boolean| return boolean;
+
+        defer ran.decrement(env.allocator);
+        return ran.toBool();
+    }
+
+    // /// note that this does claim ownership of the string.
+    // pub fn runToStr(value: Value, env: *Environment) Error!String.MaybeIntegerString {
+    //     const ran = value.run(env);
+    //     if (ran.cast(*String)) |str| {
+    //         ran.decrement(); // We don't want ownership of it after running it.
+    //         return MaybeIntegerString{.string = str};
+    //     }
+
+    //     defer ran.decrement(env.allocator);
+    //     return ran.toStr();
+    // }
 
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
@@ -240,9 +262,9 @@ pub const Value = enum(u64) {
 
         return switch (value.tag()) {
             .constant => @boolToInt(value == Value.@"true"),
-            .integer => value.castUnchecked(Integer),
-            .string => value.castUnchecked(*String).parseInt(),
-            else => Error.InvalidConversion,
+            .integer => value.cast(Integer).?,
+            .string => value.cast(*String).?.parseInt(),
+            else => error.InvalidConversion,
         };
     }
 
@@ -255,14 +277,17 @@ pub const Value = enum(u64) {
         // if it's the empty string.
         return switch (value.tag()) {
             .constant => value == Value.@"true",
-            .integer => value.castUnchecked(Integer) != 0,
-            .string => value.castUnchecked(*String).len() != 0,
-            else => Error.InvalidConversion,
+            .integer => value.cast(Integer).? != 0,
+            .string => value.cast(*String).?.len() != 0,
+            else => error.InvalidConversion,
         };
     }
 
-    /// Converts `value` to an `*String`, as per the Knight spec. For types without a conversion
-    /// defined, `InvalidConversion` is returned.
+    /// Converts `value` to a `String.MaybeIntegerString`, as per the Knight spec. For types without
+    /// a conversion defined, `InvalidConversion` is returned.
+    ///
+    /// Note that this doesn't actually allocate anything or increment any `String`s refcount. If
+    /// you want a `*String`, you'll need to call `.toString` on the resulting `MaybeIntegerString`.
     pub fn toStr(value: Value) Error!String.MaybeIntegerString {
         assert(!value.isUndefined());
 
@@ -284,14 +309,14 @@ pub const Value = enum(u64) {
             .integer => switch (value) {
                 Value.zero => String.MaybeIntegerString{ .string = &strings.zero_string },
                 Value.one => String.MaybeIntegerString{ .string = &strings.one_string },
-                else => String.MaybeIntegerString.integerSlice(value.castUnchecked(Integer)),
+                else => String.MaybeIntegerString.integerSlice(value.cast(Integer).?),
             },
             .string => blk: {
-                var string = value.castUnchecked(*String);
+                var string = value.cast(*String).?;
                 string.increment();
                 break :blk .{ .string = string };
             },
-            else => Error.InvalidConversion,
+            else => error.InvalidConversion,
         };
     }
 
@@ -303,10 +328,10 @@ pub const Value = enum(u64) {
                 Value.@"null" => try writer.print("Null()", .{}),
                 else => unreachable,
             },
-            .integer => try writer.print("Integer({d})", .{value.castUnchecked(Integer)}),
-            .string => try writer.print("String({s})", .{value.castUnchecked(*String).slice()}),
-            .variable => try writer.print("Variable({s})", .{value.castUnchecked(*Variable).name}),
-            .block => try writer.print("Block({c})", .{value.castUnchecked(*Block).func.name}),
+            .integer => try writer.print("Integer({d})", .{value.cast(Integer).?}),
+            .string => try writer.print("String({s})", .{value.cast(*String).?.slice()}),
+            .variable => try writer.print("Variable({s})", .{value.cast(*Variable).?.name}),
+            .block => try writer.print("Block({c})", .{value.cast(*Block).?.function.name}),
         }
     }
 };
@@ -320,15 +345,15 @@ const testing_allocator = std.testing.allocator;
 test "bitmasking integer values" {
     const zero = Value.zero;
     try expect(zero.is(Integer));
-    try expectEqual(@as(Integer, 0), try zero.cast(Integer));
+    try expectEqual(@as(Integer, 0), zero.cast(Integer).?);
 
     const thirty_four = Value.init(Integer, 34);
     try expect(thirty_four.is(Integer));
-    try expectEqual(@as(Integer, 34), try thirty_four.cast(Integer));
+    try expectEqual(@as(Integer, 34), thirty_four.cast(Integer).?);
 
     const negative_four_million_and_change = Value.init(Integer, -4_531_681);
     try expect(negative_four_million_and_change.is(Integer));
-    try expectEqual(@as(Integer, -4_531_681), try negative_four_million_and_change.cast(Integer));
+    try expectEqual(@as(Integer, -4_531_681), negative_four_million_and_change.cast(Integer).?);
 
     try expect(!zero.is(bool));
     try expect(!zero.is(Null));
@@ -339,11 +364,11 @@ test "bitmasking integer values" {
 test "bitmasking boolean values" {
     const truth = Value.init(bool, true);
     try expect(truth.is(bool));
-    try expectEqual(true, try truth.cast(bool));
+    try expectEqual(true, truth.cast(bool).?);
 
     const falsehood = Value.init(bool, false);
     try expect(falsehood.is(bool));
-    try expectEqual(false, try falsehood.cast(bool));
+    try expectEqual(false, falsehood.cast(bool).?);
 
     try expect(!truth.is(Integer));
     try expect(!truth.is(Null));
@@ -354,7 +379,7 @@ test "bitmasking boolean values" {
 test "bitmasking nul values" {
     const n = Value.init(Null, .{});
     try expect(n.is(Null));
-    try expectEqual(Null{}, try n.cast(Null));
+    try expectEqual(Null{}, n.cast(Null).?);
 
     try expect(!n.is(Integer));
     try expect(!n.is(bool));
@@ -366,7 +391,7 @@ test "bitmasking string values" {
     const greeting = "Hello, world!";
     const string = Value.init(*String, &String.noFree(greeting));
     try expect(string.is(*String));
-    try std.testing.expectEqualStrings(greeting, (try string.cast(*String)).slice());
+    try std.testing.expectEqualStrings(greeting, string.cast(*String).?.slice());
 
     try expect(!string.is(Integer));
     try expect(!string.is(bool));
@@ -414,11 +439,11 @@ test "to int conversions" {
     var env = Environment.init(testing_allocator);
     defer env.deinit();
     try expectError(
-        Error.InvalidConversion,
+        error.InvalidConversion,
         Value.init(*Variable, try env.fetch(.Borrowed, "foo")).toInt(),
     );
     var blk = Block{ .func = undefined, .args = undefined };
-    try expectError(Error.InvalidConversion, Value.init(*Block, &blk).toInt());
+    try expectError(error.InvalidConversion, Value.init(*Block, &blk).toInt());
 }
 
 test "to bool conversions" {
@@ -440,12 +465,12 @@ test "to bool conversions" {
     var env = Environment.init(testing_allocator);
     defer env.deinit();
     try expectError(
-        Error.InvalidConversion,
+        error.InvalidConversion,
         Value.init(*Variable, try env.fetch(.Borrowed, "foo")).toBool(),
     );
 
     var blk = Block{ .func = undefined, .args = undefined };
-    try expectError(Error.InvalidConversion, Value.init(*Block, &blk).toBool());
+    try expectError(error.InvalidConversion, Value.init(*Block, &blk).toBool());
 }
 
 test "to string conversions" {
@@ -477,11 +502,11 @@ test "to string conversions" {
     var env = Environment.init(testing_allocator);
     defer env.deinit();
     try expectError(
-        Error.InvalidConversion,
+        error.InvalidConversion,
         Value.init(*Variable, try env.fetch(.Borrowed, "foo")).toStr(),
     );
     var blk = Block{ .func = undefined, .args = undefined };
-    try expectError(Error.InvalidConversion, Value.init(*Block, &blk).toStr());
+    try expectError(error.InvalidConversion, Value.init(*Block, &blk).toStr());
 
     // make sure it increases the refcount
     var s = String.owned(try testing_allocator.dupe(u8, "Hello, world!"));

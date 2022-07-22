@@ -328,14 +328,18 @@ pub const MaybeIntegerString = union(enum) {
     string: *String,
     integer: std.BoundedArray(u8, std.fmt.count("{d}", .{std.math.minInt(Integer)})),
 
-    pub fn toString(string: *MaybeIntegerString, alloc: Allocator, interner: *Interner) !*String {
+    pub fn toString(
+        string: *const MaybeIntegerString,
+        alloc: Allocator,
+        interner: *Interner,
+    ) !*String {
         return switch (string.*) {
             .string => |s| s,
             .integer => |b| interner.fetch(alloc, b.slice()),
         };
     }
 
-    pub fn slice(string: *MaybeIntegerString) []const u8 {
+    pub fn slice(string: *const MaybeIntegerString) []const u8 {
         return switch (string.*) {
             .string => |s| s.slice(),
             .integer => |*b| b.slice(),

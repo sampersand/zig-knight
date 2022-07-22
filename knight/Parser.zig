@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const String = @import("String.zig");
+const Function = @import("Function.zig");
 
 const value = @import("value.zig");
 const Value = value.Value;
@@ -77,11 +78,11 @@ fn nextInteger(parser: *Parser) Error!value.Integer {
         parser.advance();
 
         if (@mulWithOverflow(@TypeOf(x), x, 10, &x)) {
-            return Error.IntegerLiteralOverflow;
+            return error.IntegerLiteralOverflow;
         }
 
         if (@addWithOverflow(@TypeOf(x), x, digit, &x)) {
-            return Error.IntegerLiteralOverflow;
+            return error.IntegerLiteralOverflow;
         }
     }
 
@@ -113,13 +114,13 @@ fn nextString(parser: *Parser, alloc: Allocator, interner: *String.Interner) !*S
         }
     }
 
-    return Error.StringDoesntEnd;
+    return error.StringDoesntEnd;
 }
 
 pub fn next(parser: *Parser, env: *Environment) Error!Value {
     parser.stripWhitespaceAndComments();
 
-    const chr = parser.peek() orelse return Error.EndOfStream;
+    const chr = parser.peek() orelse return error.EndOfStream;
 
     if (std.ascii.isUpper(chr)) {
         while (parser.peek()) |c| {
@@ -138,8 +139,24 @@ pub fn next(parser: *Parser, env: *Environment) Error!Value {
         'T', 'F' => Value.init(bool, chr == 'T'),
         'N' => Value.@"null",
         else => blk: {
-            // todo: parse functions
-            break :blk Error.UnknownTokenStart;
+            if (!std.ascii.isUpper(chr)) {
+                parser.advance();
+            }
+
+            const function = Function.fetch(chr) orelse return error.UnknownTokenStart;
+
+            var block = try env.allocator.create(Function.Block);
+            errdefer env.allocator.destroy(block);
+
+            block.refcount = 1;
+            block.function = function;
+
+            var i: @TypeOf(function.arity) = 0;
+            while (i < function.arity) : (i += 1) {
+                block.args[i] = try parser.next(env);
+            }
+
+            break :blk Value.init(*Function.Block, block);
         },
     };
 }

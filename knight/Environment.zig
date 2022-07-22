@@ -28,7 +28,7 @@ pub const Variable = struct {
     /// `variable` has yet to be assigned.
     pub fn fetch(variable: *const Variable) Error!Value {
         if (variable.value.isUndefined()) {
-            return Error.UndefinedVariable;
+            return error.UndefinedVariable;
         }
 
         variable.value.increment();
@@ -112,22 +112,22 @@ test "variable fetching works" {
 
     const v1 = try env.fetch(.Borrowed, "hello");
     try expectEqualStrings(v1.name, "hello");
-    try expectError(Error.UndefinedVariable, v1.fetch());
+    try expectError(error.UndefinedVariable, v1.fetch());
 
     const v2 = try env.fetch(.Borrowed, "world");
     try expectEqualStrings(v2.name, "world");
-    try expectError(Error.UndefinedVariable, v2.fetch());
+    try expectError(error.UndefinedVariable, v2.fetch());
     try expect(v1 != v2);
 
     const v3 = try env.fetch(.Borrowed, "hello");
     try expectEqual(v1, v3);
     try expectEqualStrings(v1.name, "hello");
-    try expectError(Error.UndefinedVariable, v1.fetch());
+    try expectError(error.UndefinedVariable, v1.fetch());
 
     v1.assign(env.allocator, Value.@"true");
     try expectEqualStrings(v1.name, "hello");
     try expectEqual(try v1.fetch(), Value.@"true");
-    try expectError(Error.UndefinedVariable, v2.fetch());
+    try expectError(error.UndefinedVariable, v2.fetch());
 
     const Integer = @import("value.zig").Integer;
     (try env.fetch(.Borrowed, "world")).assign(env.allocator, Value.init(Integer, 34));

@@ -10,8 +10,7 @@ pub fn main() !void {
     var env = Environment.init(arena.allocator());
     defer env.deinit();
 
-    var program = try knight.play("abc", &env);
-    (try env.fetch(.Borrowed, "abc")).assign(env.allocator, @import("value.zig").Value.one);
+    var program = try knight.play("O + 1 A 'a'", &env);
     defer program.decrement(env.allocator);
 
     try program.dump(std.io.getStdOut().writer());

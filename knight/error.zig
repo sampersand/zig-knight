@@ -1,5 +1,10 @@
+const std = @import("std");
 pub const Error = error{
     UndefinedVariable,
     InvalidConversion,
-    OutOfMemory,
-} || @import("Parser.zig").Error;
+    NotAnAsciiInteger,
+    InvalidType,
+    EmptyString,
+    DomainError,
+    OutOfMemory, // todo: union with error?
+} || @import("Parser.zig").Error || std.os.WriteError;
