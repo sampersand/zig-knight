@@ -101,7 +101,7 @@ fn nextIdentifier(parser: *Parser, env: *Environment) !*Environment.Variable {
         parser.advance();
     }
 
-    return env.fetch(.Borrowed, parser.source[start..parser.index]);
+    return env.lookup(parser.source[start..parser.index]);
 }
 
 fn nextString(parser: *Parser, alloc: Allocator, interner: *String.Interner) !*String {

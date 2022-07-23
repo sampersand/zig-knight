@@ -3,7 +3,7 @@ const Parser = @import("Parser.zig");
 const Environment = @import("Environment.zig");
 const knight = @import("knight.zig");
 
-pub fn main() !void {
+pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -26,3 +26,13 @@ pub fn main() !void {
     // var program = Parser{ .source = "123" }.parse(&env) catch |e| std.debug.panic("error: {s}", .{e});
     // defer program.decrement();
 }
+
+// pub fn main() anyerror!void {
+//     // Note that info level log messages are by default printed only in Debug
+//     // and ReleaseSafe build modes.
+//     std.log.info("All your codebase are belong to us.", .{});
+// }
+
+// test "basic test" {
+//     try std.testing.expectEqual(10, 3 + 7);
+// }

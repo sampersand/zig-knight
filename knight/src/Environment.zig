@@ -1,8 +1,14 @@
+//! The current runtime environment within Knight.
+//!
+//! All Knight programs must execute with a certain context---mainly what variables are defined, but
+//! also things like stdin/stdout handles---which must be passed around to all functions.
+//!
+//! Additionally, to improve performance, all strings are interned, which can be used for improved
+//! variable lookup.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Error = @import("error.zig").Error;
-const Interner = @import("String.zig").Interner;
 
 const Environment = @This();
 
@@ -16,7 +22,7 @@ pub const Variable = struct {
 
     /// The value of the `Variable`. You shouldn't directly access this, instead replace it with
     /// `Variable.assign` and access it with `Variable.fetch`.
-    value: Value = Value.@"undefined",
+    value: Value = Value.@"undefined", // `?Value` takes up too much space
 
     /// Associates `value` with `variable`, deinitializing the previous value (if any).
     pub fn assign(variable: *Variable, allocator: Allocator, value: Value) void {
@@ -42,12 +48,18 @@ pub const Variable = struct {
     }
 };
 
-// The variables for the environment. Note that it's a pointer to a `Variable`, and not a
-// variable directly, as pointers to variables are needed for `Value`, and resizing `variables`
-// when new values are added may invalidate old pointers.
+/// The variables for the environment. Note that it's a pointer to a `Variable`, and not a
+/// variable directly, as pointers to variables are needed for `Value`, and resizing `variables`
+/// when new values are added may invalidate old pointers.
 variables: std.StringHashMapUnmanaged(*Variable) = .{},
-interner: Interner = .{},
+
+/// A string interner, used to keep track of the allocated `String`s for the environment.
+interner: @import("String.zig").Interner = .{},
+
+/// The allocator for the environment.
 allocator: Allocator,
+
+/// A random number generator, used for the `RANDOM` functoin.
 random: std.rand.DefaultPrng,
 
 /// Creates a new `Environment` with the given allocator.
@@ -61,29 +73,15 @@ pub fn init(allocator: Allocator) !Environment {
     };
 }
 
-const FetchOwnership = enum { Owned, Borrowed };
 /// Fetches the variable identified by `name`; If no such variable exists, one will be created.
-///
-/// Note that `name` can either be a borrowed slice (in which case, it will be duplicated if a new
-/// variable needs to be created), or an owned slice. If it's `.Owned`, it must be allocated with
-/// the `env.allocator` allocator.
-pub fn fetch(
-    env: *Environment,
-    comptime owned: FetchOwnership,
-    name: []const u8,
-) Allocator.Error!*Variable {
+/// Note that `name` must be a borrowed slice.
+pub fn lookup(env: *Environment, name: []const u8) Allocator.Error!*Variable {
     var entry = try env.variables.getOrPut(env.allocator, name);
 
     if (!entry.found_existing) {
-        // If we don't own `name`, we need to duplicate it so we have an owned version.
-        if (owned == .Borrowed) {
-            entry.key_ptr.* = try env.allocator.dupe(u8, name);
-        }
+        entry.key_ptr.* = try env.allocator.dupe(u8, name);
         entry.value_ptr.* = try env.allocator.create(Variable);
         entry.value_ptr.*.* = .{ .name = entry.key_ptr.* };
-    } else if (owned == .Owned) {
-        // If a variable with `name` already existed, then we need to get rid of the owned name.
-        env.allocator.free(name);
     }
 
     return entry.value_ptr.*;
@@ -117,16 +115,16 @@ test "variable fetching works" {
 
     var env = Environment.init(std.testing.allocator);
 
-    const v1 = try env.fetch(.Borrowed, "hello");
+    const v1 = try env.lookup("hello");
     try expectEqualStrings(v1.name, "hello");
     try expectError(error.UndefinedVariable, v1.fetch());
 
-    const v2 = try env.fetch(.Borrowed, "world");
+    const v2 = try env.lookup("world");
     try expectEqualStrings(v2.name, "world");
     try expectError(error.UndefinedVariable, v2.fetch());
     try expect(v1 != v2);
 
-    const v3 = try env.fetch(.Borrowed, "hello");
+    const v3 = try env.lookup("hello");
     try expectEqual(v1, v3);
     try expectEqualStrings(v1.name, "hello");
     try expectError(error.UndefinedVariable, v1.fetch());
@@ -137,7 +135,7 @@ test "variable fetching works" {
     try expectError(error.UndefinedVariable, v2.fetch());
 
     const Integer = @import("value.zig").Integer;
-    (try env.fetch(.Borrowed, "world")).assign(env.allocator, Value.init(Integer, 34));
+    (try env.lookup("world")).assign(env.allocator, Value.init(Integer, 34));
     try expectEqualStrings(v2.name, "world");
     try expectEqual(try v1.fetch(), Value.@"true");
     try expectEqual(try v2.fetch(), Value.init(Integer, 34));
