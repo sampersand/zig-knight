@@ -256,11 +256,40 @@ pub const Value = enum(u64) {
         return ran.toStr();
     }
 
+    pub fn runTo(value: Value, comptime T: type, env: *Environment) Error!T {
+        const ran = try value.run(env);
+
+        if (value.cast(T)) |t| return t;
+
+        defer ran.decrement(env.allocator);
+        return ran.to(T);
+    }
+
+    pub fn to(value: Value, comptime T: type) Error!T {
+        assert(!value.isUndefined());
+
+        return switch (T) {
+            Integer => value.toInt(),
+            bool => value.toBool(),
+            // *String => value.toStr(),
+            else => @compileError("non-value type given: " ++ @typeName(T)),
+        };
+    }
+
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
     pub fn toInt(value: Value) Error!Integer {
-        assert(!value.isUndefined());
+        return switch (try value.only(.{ bool, Null, Integer, *String }, error.InvalidConversion)) {
+            .@"null" => 0,
+            .boolean => |b| @boolToInt(b),
+            .integer => |i| i,
+            .string => |s| s.parseInt(),
+        };
+    }
 
+    /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
+    /// defined, `InvalidConversion` is returned.
+    pub fn toInt(value: Value) Error!Integer {
         return switch (value.tag()) {
             .constant => @boolToInt(value == Value.@"true"),
             .integer => value.cast(Integer).?,
@@ -339,22 +368,22 @@ pub const Value = enum(u64) {
     pub fn runDowncast(
         value: Value,
         env: *Environment,
-        comptime tys: anytype,
-    ) Error!Downcasted(tys) {
+        comptime Ts: anytype,
+    ) Error!Downcasted(Ts) {
         const ran = try value.run(env);
         errdefer ran.decrement(env.allocator);
-        return ran.downcast(tys);
+        return ran.only(Ts, error.InvalidType);
     }
 
-    pub fn downcast(value: Value, comptime tys: anytype) Error!Downcasted(tys) {
-        inline for (tys) |ty| {
+    pub fn only(value: Value, comptime Ts: anytype, comptime err: anytype) !Downcasted(Ts) {
+        inline for (Ts) |ty| {
             if (value.cast(ty)) |casted| {
                 const name = comptime enumFieldNameFor(ty);
-                return @unionInit(Downcasted(tys), name, casted);
+                return @unionInit(Downcasted(Ts), name, casted);
             }
         }
 
-        return error.InvalidType;
+        return err;
     }
 };
 
@@ -368,8 +397,8 @@ fn enumFieldNameFor(comptime T: type) []const u8 {
     };
 }
 
-pub fn Downcasted(comptime tys: anytype) type {
-    const ArgsType = @TypeOf(tys);
+pub fn Downcasted(comptime Ts: anytype) type {
+    const ArgsType = @TypeOf(Ts);
 
     if (@typeInfo(ArgsType) != .Struct) {
         @compileError("Expected tuple or struct argument, found " ++ @typeName(ArgsType));
@@ -380,11 +409,11 @@ pub fn Downcasted(comptime tys: anytype) type {
         .layout = .Auto,
         .tag_type = @Type(.{ .Enum = .{
             .layout = .Auto,
-            .tag_type = std.math.IntFittingRange(0, tys.len),
+            .tag_type = std.math.IntFittingRange(0, Ts.len),
             .fields = blk: {
-                var fields: [tys.len]std.builtin.Type.EnumField = undefined;
+                var fields: [Ts.len]std.builtin.Type.EnumField = undefined;
 
-                inline for (tys) |ty, idx| {
+                inline for (Ts) |ty, idx| {
                     fields[idx] = .{ .name = enumFieldNameFor(ty), .value = idx };
                 }
 
@@ -394,9 +423,9 @@ pub fn Downcasted(comptime tys: anytype) type {
             .is_exhaustive = true,
         } }),
         .fields = blk: {
-            var fields: [tys.len]std.builtin.Type.UnionField = undefined;
+            var fields: [Ts.len]std.builtin.Type.UnionField = undefined;
 
-            inline for (tys) |ty, idx| {
+            inline for (Ts) |ty, idx| {
                 fields[idx] = .{ .name = enumFieldNameFor(ty), .field_type = ty, .alignment = 0 };
             }
 

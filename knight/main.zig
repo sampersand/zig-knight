@@ -12,6 +12,7 @@ pub fn main() !void {
 
     var program = try knight.play(
         \\; = i 0
+        \\; O & 9 1
         \\; = sum 0
         \\; WHILE < i 50
         \\      ; = sum + sum i

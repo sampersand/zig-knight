@@ -20,8 +20,7 @@ const function_P = Function{
     .name = 'P',
     .arity = 0,
     .function = struct {
-        fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            _ = args;
+        fn fun(_: [*]const Value, env: *Environment) Error!Value {
             _ = env;
             std.debug.todo("todo");
         }
@@ -32,8 +31,7 @@ const function_R = Function{
     .name = 'R',
     .arity = 0,
     .function = struct {
-        fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            _ = args;
+        fn fun(_: [*]const Value, env: *Environment) Error!Value {
             _ = env;
             std.debug.todo("todo");
         }
@@ -45,9 +43,10 @@ const function_E = Function{
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            _ = args;
-            _ = env;
-            std.debug.todo("todo");
+            const str = try args[0].runToStr(env);
+            defer str.decrement();
+
+            return @import("knight.zig").play(str.slice());
         }
     }.fun,
 };
@@ -58,6 +57,7 @@ const function_B = Function{
     .function = struct {
         fn fun(args: [*]const Value, _: *Environment) Error!Value {
             args[0].increment();
+
             return args[0];
         }
     }.fun,
@@ -93,9 +93,9 @@ const function_Q = Function{
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            const status_code = try args[0].runToInt(env);
+            const status = try args[0].runToInt(env);
 
-            std.os.exit(std.math.cast(u8, status_code) orelse return error.DomainError);
+            std.os.exit(std.math.cast(u8, status) orelse return error.DomainError);
         }
     }.fun,
 };
@@ -105,7 +105,9 @@ const @"function_!" = Function{
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            return Value.init(bool, !try args[0].runToBool(env));
+            const boolean = try args[0].runToBool(env);
+
+            return Value.init(bool, !bolean);
         }
     }.fun,
 };
@@ -129,7 +131,7 @@ const function_D = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const ran = try args[0].run(env);
-            errdefer ran.decrement(env.allocator);
+            errdefer ran.decrement(env.allocator); // on success, we should just return it.
 
             try ran.dump(std.io.getStdOut().writer());
             return ran;
@@ -168,22 +170,24 @@ const function_A = Function{
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            switch (try args[0].runDowncast(env, .{ Integer, *String })) {
-                .integer => |int| {
-                    const byte = std.math.cast(u8, int) orelse return error.NotAnAsciiInteger;
-                    const str = try env.interner.fetch(env.allocator, @as(*const [1]u8, &byte));
+            const arg = try args[0].run(env);
+            defer arg.decrement();
 
-                    return Value.init(*String, str);
-                },
-                .string => |str| {
-                    defer str.decrement();
+            if (arg.cast(Integer)) |int| {
+                const byte = std.math.cast(u8, int) orelse return error.NotAnAsciiInteger;
+                const str = try env.interner.fetch(env.allocator, @as(*const [1]u8, &byte));
 
-                    return if (str.slice().len == 0)
-                        error.EmptyString
-                    else
-                        Value.init(Integer, str.slice().ptr[0]);
-                },
+                return Value.init(*String, str);
             }
+
+            if (arg.cast(*String)) |str| {
+                return if (str.slice().len == 0)
+                    error.EmptyString
+                else
+                    Value.init(Integer, str.slice().ptr[0]);
+            }
+
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -194,7 +198,10 @@ const @"function_+" = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             switch (try args[0].runDowncast(env, .{ Integer, *String })) {
-                .integer => |int| return Value.init(Integer, int + try args[1].runToInt(env)),
+                .integer => |lhs| {
+                    const rhs = try args[1].runTo(Integer, env);
+                    return Value.init(Integer, lhs + rhs);
+                },
                 .string => |lhs| {
                     const rhs = if (args[1].runToStr(env)) |rhs| rhs else |err| {
                         lhs.decrement();
@@ -367,7 +374,7 @@ const @"function_&" = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const lhs = try args[0].run(env);
-            const eql = lhs.toBool();
+            const eql = lhs.to(bool);
 
             // `eql` must be a non-error and `true`.
             if (eql catch false) {
@@ -387,7 +394,7 @@ const @"function_|" = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const lhs = try args[0].run(env);
-            const eql = lhs.toBool();
+            const eql = lhs.to(bool);
 
             if (!(eql catch true)) {
                 return lhs;
