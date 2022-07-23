@@ -139,6 +139,8 @@ pub const Value = enum(u64) {
     }
 
     pub fn tag(value: Value) Tag {
+        assert(!value.isUndefined());
+
         return @intToEnum(Tag, @truncate(meta.Tag(Tag), value.bits()));
     }
 
@@ -189,8 +191,6 @@ pub const Value = enum(u64) {
 
     /// Increments the refcount of a `Value`. Only needed for `*String` and `*Block`s.
     pub fn increment(value: Value) void {
-        assert(!value.isUndefined());
-
         switch (value.tag()) {
             .string => value.cast(*String).?.increment(),
             .block => value.cast(*Block).?.increment(),
@@ -200,8 +200,6 @@ pub const Value = enum(u64) {
 
     /// Decrements the refcount of a `Value`. Only needed for `*String` and `*Block`s.
     pub fn decrement(value: Value, alloc: Allocator) void {
-        assert(!value.isUndefined());
-
         switch (value.tag()) {
             .string => value.cast(*String).?.decrement(),
             .block => value.cast(*Block).?.decrement(alloc),
@@ -265,28 +263,6 @@ pub const Value = enum(u64) {
         return ran.to(T);
     }
 
-    pub fn to(value: Value, comptime T: type) Error!T {
-        assert(!value.isUndefined());
-
-        return switch (T) {
-            Integer => value.toInt(),
-            bool => value.toBool(),
-            // *String => value.toStr(),
-            else => @compileError("non-value type given: " ++ @typeName(T)),
-        };
-    }
-
-    /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
-    /// defined, `InvalidConversion` is returned.
-    pub fn toInt(value: Value) Error!Integer {
-        return switch (try value.only(.{ bool, Null, Integer, *String }, error.InvalidConversion)) {
-            .@"null" => 0,
-            .boolean => |b| @boolToInt(b),
-            .integer => |i| i,
-            .string => |s| s.parseInt(),
-        };
-    }
-
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
     pub fn toInt(value: Value) Error!Integer {
@@ -301,8 +277,6 @@ pub const Value = enum(u64) {
     /// Converts `value` to an `bool`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
     pub fn toBool(value: Value) Error!bool {
-        assert(!value.isUndefined());
-
         // OPTIMIZATION: You could just check to see if the value is `<= Value.zero.bits()`, or
         // if it's the empty string.
         return switch (value.tag()) {
@@ -319,8 +293,6 @@ pub const Value = enum(u64) {
     /// Note that this doesn't actually allocate anything or increment any `String`s refcount. If
     /// you want a `*String`, you'll need to call `.toString` on the resulting `MaybeIntegerString`.
     pub fn toStr(value: Value) Error!String.MaybeIntegerString {
-        assert(!value.isUndefined());
-
         const strings = struct {
             var true_string = String.noFree("true");
             var false_string = String.noFree("false");

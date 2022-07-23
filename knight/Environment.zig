@@ -45,13 +45,20 @@ pub const Variable = struct {
 // The variables for the environment. Note that it's a pointer to a `Variable`, and not a
 // variable directly, as pointers to variables are needed for `Value`, and resizing `variables`
 // when new values are added may invalidate old pointers.
-variables: std.StringHashMapUnmanaged(*Variable),
-interner: Interner,
+variables: std.StringHashMapUnmanaged(*Variable) = .{},
+interner: Interner = .{},
 allocator: Allocator,
+random: std.rand.DefaultPrng,
 
 /// Creates a new `Environment` with the given allocator.
-pub fn init(allocator: Allocator) Environment {
-    return .{ .variables = .{}, .interner = .{}, .allocator = allocator };
+pub fn init(allocator: Allocator) !Environment {
+    var bytes: [@sizeOf(u64)]u8 = undefined;
+    try std.os.getrandom(&bytes);
+
+    return Environment{
+        .allocator = allocator,
+        .random = std.rand.DefaultPrng.init(std.mem.readIntNative(u64, &bytes)),
+    };
 }
 
 const FetchOwnership = enum { Owned, Borrowed };

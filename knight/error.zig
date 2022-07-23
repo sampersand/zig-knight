@@ -13,4 +13,5 @@ pub const Error = error{
     Overflow,
     NegativeDenominator,
     Underflow,
-};
+    StreamTooLong,
+} || std.os.OpenError || std.os.ConnectError || std.os.ReadError || std.os.WriteError;

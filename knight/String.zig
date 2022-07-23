@@ -306,7 +306,7 @@ test "toInt conforms to spec" {
 }
 
 pub const Interner = struct {
-    strings: std.StringHashMapUnmanaged(String) = .{},
+    strings: std.StringHashMapUnmanaged(*String) = .{},
 
     // note that `s` should always be borrowed.
     pub fn fetch(interner: *Interner, alloc: Allocator, str: []const u8) Allocator.Error!*String {
@@ -365,7 +365,10 @@ pub const MaybeIntegerString = union(enum) {
         interner: *Interner,
     ) !*String {
         return switch (string.*) {
-            .string => |s| s,
+            .string => |s| {
+                s.increment();
+                return s;
+            },
             .integer => |b| interner.fetch(alloc, b.slice()),
         };
     }

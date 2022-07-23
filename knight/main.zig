@@ -7,18 +7,20 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var env = Environment.init(arena.allocator());
+    var env = try Environment.init(arena.allocator());
     defer env.deinit();
 
     var program = try knight.play(
-        \\; = i 0
-        \\; O & 9 1
-        \\; = sum 0
-        \\; WHILE < i 50
-        \\      ; = sum + sum i
-        \\      : = i + i 1
-        \\: OUTPUT + "SUM(0..50)=" sum
-    , &env); // => prints out `SUM(0..50)=1225`
+        \\; = fizzbuzz BLOCK
+        \\  ; = i 0
+        \\  : WHILE < i max
+        \\      ; = i + i 1
+        \\      ; & (= div3 ! % i 3) OUTPUT "Fizz\"
+        \\      ; & (= div5 ! % i 5) OUTPUT "Buzz\"
+        \\      : OUTPUT IF (| div3 div5) "" i
+        \\; = max 100
+        \\CALL fizzbuzz
+    , &env);
     defer program.decrement(env.allocator);
 
     // var program = Parser{ .source = "123" }.parse(&env) catch |e| std.debug.panic("error: {s}", .{e});

@@ -21,8 +21,14 @@ const function_P = Function{
     .arity = 0,
     .function = struct {
         fn fun(_: [*]const Value, env: *Environment) Error!Value {
-            _ = env;
-            std.debug.todo("todo");
+            const line = (try std.io.getStdIn().reader().readUntilDelimiterOrEofAlloc(
+                env.allocator,
+                '\n',
+                std.math.maxInt(usize),
+            )) orelse return Value.@"null";
+            const string = try env.allocator.create(String);
+            string.initOwned(line);
+            return Value.init(*String, string);
         }
     }.fun,
 };
@@ -32,8 +38,10 @@ const function_R = Function{
     .arity = 0,
     .function = struct {
         fn fun(_: [*]const Value, env: *Environment) Error!Value {
-            _ = env;
-            std.debug.todo("todo");
+            // rand should only return positive integers.
+            const UInteger = std.meta.Int(.unsigned, @bitSizeOf(Integer) - 1);
+
+            return Value.init(Integer, env.random.random().int(UInteger));
         }
     }.fun,
 };
@@ -46,7 +54,7 @@ const function_E = Function{
             const str = try args[0].runToStr(env);
             defer str.decrement();
 
-            return @import("knight.zig").play(str.slice());
+            return @import("knight.zig").play(str.slice(), env);
         }
     }.fun,
 };
@@ -83,7 +91,7 @@ const @"function_`" = Function{
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             _ = args;
             _ = env;
-            std.debug.todo("todo");
+            std.debug.todo("this function");
         }
     }.fun,
 };
@@ -105,9 +113,7 @@ const @"function_!" = Function{
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            const boolean = try args[0].runToBool(env);
-
-            return Value.init(bool, !bolean);
+            return Value.init(bool, !try args[0].runToBool(env));
         }
     }.fun,
 };
@@ -133,7 +139,10 @@ const function_D = Function{
             const ran = try args[0].run(env);
             errdefer ran.decrement(env.allocator); // on success, we should just return it.
 
-            try ran.dump(std.io.getStdOut().writer());
+            const stdout = std.io.getStdOut().writer();
+            try ran.dump(stdout);
+            try stdout.writeAll("\n");
+
             return ran;
         }
     }.fun,
@@ -155,7 +164,7 @@ const function_O = Function{
                 try stdout.writeAll(slice);
                 try stdout.writeAll("\n");
             } else {
-                try stdout.writeAll(slice[0 .. slice.len - 2]);
+                try stdout.writeAll(slice[0 .. slice.len - 1]);
             }
 
             try stdout_buffer.flush();
@@ -171,20 +180,19 @@ const function_A = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const arg = try args[0].run(env);
-            defer arg.decrement();
 
-            if (arg.cast(Integer)) |int| {
-                const byte = std.math.cast(u8, int) orelse return error.NotAnAsciiInteger;
-                const str = try env.interner.fetch(env.allocator, @as(*const [1]u8, &byte));
+            if (arg.cast(Integer)) |integer| {
+                const byte = std.math.cast(u8, integer) orelse return error.NotAnAsciiInteger;
+                const string = try env.interner.fetch(env.allocator, @as(*const [1]u8, &byte));
 
-                return Value.init(*String, str);
+                return Value.init(*String, string);
             }
 
-            if (arg.cast(*String)) |str| {
-                return if (str.slice().len == 0)
-                    error.EmptyString
-                else
-                    Value.init(Integer, str.slice().ptr[0]);
+            defer arg.decrement(env.allocator);
+
+            if (arg.cast(*String)) |string| {
+                const slice = string.slice();
+                return if (slice.len == 0) error.EmptyString else Value.init(Integer, slice.ptr[0]);
             }
 
             return error.InvalidType;
@@ -197,36 +205,32 @@ const @"function_+" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            switch (try args[0].runDowncast(env, .{ Integer, *String })) {
-                .integer => |lhs| {
-                    const rhs = try args[1].runTo(Integer, env);
-                    return Value.init(Integer, lhs + rhs);
-                },
-                .string => |lhs| {
-                    const rhs = if (args[1].runToStr(env)) |rhs| rhs else |err| {
-                        lhs.decrement();
-                        return err;
-                    };
+            const lhs = try args[0].run(env);
 
-                    if (rhs.slice().len == 0) {
-                        rhs.decrement();
-                        return Value.init(*String, lhs);
-                    }
-
-                    if (lhs.slice().len == 0) {
-                        const r = try rhs.toString(env.allocator, &env.interner);
-                        lhs.decrement();
-                        return Value.init(*String, r);
-                    }
-
-                    defer lhs.decrement();
-                    defer rhs.decrement();
-
-                    const cat = try env.interner.concat(env.allocator, lhs.slice(), rhs.slice());
-
-                    return Value.init(*String, cat);
-                },
+            if (lhs.cast(Integer)) |integer| {
+                return Value.init(Integer, integer + try args[1].runToInt(env));
             }
+
+            defer lhs.decrement(env.allocator);
+
+            if (lhs.cast(*String)) |string| {
+                const rstring = try args[1].runToStr(env);
+                defer rstring.decrement();
+
+                if (rstring.slice().len == 0) {
+                    string.increment();
+                    return lhs;
+                }
+
+                if (string.slice().len == 0) {
+                    return Value.init(*String, try rstring.toString(env.allocator, &env.interner));
+                }
+
+                const cat = try env.interner.concat(env.allocator, string.slice(), rstring.slice());
+                return Value.init(*String, cat);
+            }
+
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -236,9 +240,14 @@ const @"function_-" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            return switch (try args[0].runDowncast(env, .{Integer})) {
-                .integer => |int| Value.init(Integer, int - try args[1].runToInt(env)),
-            };
+            const lhs = try args[0].run(env);
+
+            if (lhs.cast(Integer)) |integer| {
+                return Value.init(Integer, integer - try args[1].runToInt(env));
+            }
+
+            lhs.decrement(env.allocator);
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -250,7 +259,7 @@ const @"function_*" = Function{
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             _ = args;
             _ = env;
-            std.debug.todo("todo");
+            std.debug.todo("this function");
         }
     }.fun,
 };
@@ -260,12 +269,15 @@ const @"function_/" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            switch (try args[0].runDowncast(env, .{Integer})) {
-                .integer => |int| {
-                    const rhs = try args[1].runToInt(env);
-                    return Value.init(Integer, try std.math.divTrunc(Integer, int, rhs));
-                },
+            const lhs = try args[0].run(env);
+
+            if (lhs.cast(Integer)) |integer| {
+                const denom = try args[1].runToInt(env);
+                return Value.init(Integer, try std.math.divTrunc(Integer, integer, denom));
             }
+
+            lhs.decrement(env.allocator);
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -275,12 +287,15 @@ const @"function_%" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            switch (try args[0].runDowncast(env, .{Integer})) {
-                .integer => |int| {
-                    const rhs = try args[1].runToInt(env);
-                    return Value.init(Integer, try std.math.mod(Integer, int, rhs));
-                },
+            const lhs = try args[0].run(env);
+
+            if (lhs.cast(Integer)) |integer| {
+                const base = try args[1].runToInt(env);
+                return Value.init(Integer, try std.math.mod(Integer, integer, base));
             }
+
+            lhs.decrement(env.allocator);
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -290,12 +305,15 @@ const @"function_^" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            switch (try args[0].runDowncast(env, .{Integer})) {
-                .integer => |int| {
-                    const rhs = try args[1].runToInt(env);
-                    return Value.init(Integer, try std.math.powi(Integer, int, rhs));
-                },
+            const lhs = try args[0].run(env);
+
+            if (lhs.cast(Integer)) |integer| {
+                const exponent = try args[1].runToInt(env);
+                return Value.init(Integer, try std.math.powi(Integer, integer, exponent));
             }
+
+            lhs.decrement(env.allocator);
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -305,19 +323,26 @@ const @"function_<" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            const lth = switch (try args[0].runDowncast(env, .{ Integer, *String, bool })) {
-                .integer => |int| int < try args[1].runToInt(env),
-                .boolean => |bol| !bol and try args[1].runToBool(env),
-                .string => |str| blk: {
-                    defer str.decrement();
-                    const rhs = try args[1].runToStr(env);
-                    defer rhs.decrement();
+            const lhs = try args[0].run(env);
 
-                    break :blk std.mem.order(u8, str.slice(), rhs.slice()) == .lt;
-                },
-            };
+            if (lhs.cast(Integer)) |integer| {
+                return Value.init(bool, integer < try args[1].runToInt(env));
+            }
 
-            return Value.init(bool, lth);
+            if (lhs.cast(bool)) |boolean| {
+                return Value.init(bool, !boolean and try args[1].runToBool(env));
+            }
+
+            defer lhs.decrement(env.allocator);
+
+            if (lhs.cast(*String)) |string| {
+                const rstring = try args[1].runToStr(env);
+                defer rstring.decrement();
+
+                return Value.init(bool, .lt == std.mem.order(u8, string.slice(), rstring.slice()));
+            }
+
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -327,19 +352,26 @@ const @"function_>" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            const gth = switch (try args[0].runDowncast(env, .{ Integer, *String, bool })) {
-                .integer => |int| int > try args[1].runToInt(env),
-                .boolean => |bol| bol and !try args[1].runToBool(env),
-                .string => |str| blk: {
-                    defer str.decrement();
-                    const rhs = try args[1].runToStr(env);
-                    defer rhs.decrement();
+            const lhs = try args[0].run(env);
 
-                    break :blk std.mem.order(u8, str.slice(), rhs.slice()) == .gt;
-                },
-            };
+            if (lhs.cast(Integer)) |integer| {
+                return Value.init(bool, integer > try args[1].runToInt(env));
+            }
 
-            return Value.init(bool, gth);
+            if (lhs.cast(bool)) |boolean| {
+                return Value.init(bool, boolean and !try args[1].runToBool(env));
+            }
+
+            defer lhs.decrement(env.allocator);
+
+            if (lhs.cast(*String)) |string| {
+                const rstring = try args[1].runToStr(env);
+                defer rstring.decrement();
+
+                return Value.init(bool, .gt == std.mem.order(u8, string.slice(), rstring.slice()));
+            }
+
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -355,12 +387,16 @@ const @"function_?" = Function{
             const rhs = try args[1].run(env);
             defer lhs.decrement(env.allocator);
 
+            // Identical values are equivalent.
             if (lhs == rhs) return Value.@"true";
+
+            // If the tags dont match, the values aren't equivalent.
             if (lhs.tag() != rhs.tag()) return Value.@"false";
 
-            if (lhs.cast(*String)) |l| {
-                const r = rhs.cast(*String).?;
-                return Value.init(bool, std.mem.eql(u8, l.slice(), r.slice()));
+            // Only strings require a downcast.
+            if (lhs.cast(*String)) |string| {
+                const rstring = rhs.cast(*String).?;
+                return Value.init(bool, std.mem.eql(u8, string.slice(), rstring.slice()));
             }
 
             return Value.@"false";
@@ -374,15 +410,14 @@ const @"function_&" = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const lhs = try args[0].run(env);
-            const eql = lhs.to(bool);
+            defer lhs.decrement(env.allocator);
 
             // `eql` must be a non-error and `true`.
-            if (eql catch false) {
+            if (!try lhs.toBool()) {
+                lhs.increment();
                 return lhs;
             }
 
-            lhs.decrement(env.allocator);
-            _ = try eql;
             return args[1].run(env);
         }
     }.fun,
@@ -394,14 +429,14 @@ const @"function_|" = Function{
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             const lhs = try args[0].run(env);
-            const eql = lhs.to(bool);
+            defer lhs.decrement(env.allocator);
 
-            if (!(eql catch true)) {
+            // `eql` must be a non-error and `true`.
+            if (try lhs.toBool()) {
+                lhs.increment();
                 return lhs;
             }
 
-            lhs.decrement(env.allocator);
-            _ = try eql;
             return args[1].run(env);
         }
     }.fun,
@@ -454,7 +489,10 @@ const function_I = Function{
     .arity = 3,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
-            return args[if (try args[0].runToBool(env)) 1 else 2].run(env);
+            return if (try args[0].runToBool(env))
+                args[1].run(env)
+            else
+                args[2].run(env);
         }
     }.fun,
 };
@@ -485,11 +523,12 @@ const function_S = Function{
         fn fun(args: [*]const Value, env: *Environment) Error!Value {
             _ = args;
             _ = env;
-            std.debug.todo("todo");
+            std.debug.todo("this function");
         }
     }.fun,
 };
 
+/// Fetches the function identified by `name`, returning `null` it no such function exists.
 pub fn fetch(name: u8) ?*const Function {
     return switch (name) {
         function_P.name => &function_P,
@@ -540,7 +579,16 @@ pub const Block = struct {
 
     pub fn decrement(block: *Block, alloc: std.mem.Allocator) void {
         block.refcount -= 1;
-        _ = alloc;
+
+        if (block.refcount != 0) return;
+
+        var i = @as(usize, 0);
+        while (i < block.function.arity) : (i += 1) {
+            block.args[i].decrement(alloc);
+        }
+
+        block.* = undefined;
+        alloc.destroy(block);
     }
 };
 
