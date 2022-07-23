@@ -110,7 +110,7 @@ fn nextString(parser: *Parser, alloc: Allocator, interner: *String.Interner) !*S
 
     while (parser.peekAdvance()) |c| {
         if (c == quote) {
-            return try interner.fetch(alloc, parser.source[start..parser.index]);
+            return try interner.fetch(alloc, parser.source[start .. parser.index - 1]);
         }
     }
 
@@ -166,7 +166,7 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
 test "strips leading whitespace and comments" {
-    var parser = Parser{ .source = "  #123\n  #1  \nT" };
+    var parser = Parser{ .source = "  :#123\n  #1  \nT" };
     var env = Environment.init(std.testing.allocator);
     defer env.deinit();
 

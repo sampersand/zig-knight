@@ -310,11 +310,35 @@ pub const Interner = struct {
 
     // note that `s` should always be borrowed.
     pub fn fetch(interner: *Interner, alloc: Allocator, str: []const u8) Allocator.Error!*String {
-        // TODO
-        _ = interner;
-        var s = try alloc.create(String);
-        try s.initBorrowed(alloc, str);
-        return s;
+        _ = interner; // TODO, check to see if it already exists.
+
+        var string = try alloc.create(String);
+        errdefer string.deinit(alloc);
+
+        try string.initBorrowed(alloc, str);
+        errdefer string.decrement();
+
+        return string;
+    }
+
+    pub fn concat(
+        interner: *Interner,
+        alloc: Allocator,
+        lhs: []const u8,
+        rhs: []const u8,
+    ) Allocator.Error!*String {
+        _ = interner; // TODO, check to see if it already exists.
+
+        var string = try alloc.create(String);
+        errdefer string.deinit(alloc);
+
+        try string.init(alloc, lhs.len + rhs.len);
+        errdefer string.decrement();
+
+        std.mem.copy(u8, string.asMutableSlice(), lhs);
+        std.mem.copy(u8, string.asMutableSlice()[lhs.len..], rhs);
+
+        return string;
     }
 
     // // TODO: use interner, or borrow from the source code directly.
@@ -327,6 +351,13 @@ pub const Interner = struct {
 pub const MaybeIntegerString = union(enum) {
     string: *String,
     integer: std.BoundedArray(u8, std.fmt.count("{d}", .{std.math.minInt(Integer)})),
+
+    pub fn decrement(string: *const MaybeIntegerString) void {
+        switch (string.*) {
+            .string => |s| s.decrement(),
+            else => {},
+        }
+    }
 
     pub fn toString(
         string: *const MaybeIntegerString,

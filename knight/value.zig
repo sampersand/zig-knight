@@ -244,16 +244,17 @@ pub const Value = enum(u64) {
     }
 
     // /// note that this does claim ownership of the string.
-    // pub fn runToStr(value: Value, env: *Environment) Error!String.MaybeIntegerString {
-    //     const ran = value.run(env);
-    //     if (ran.cast(*String)) |str| {
-    //         ran.decrement(); // We don't want ownership of it after running it.
-    //         return MaybeIntegerString{.string = str};
-    //     }
+    pub fn runToStr(value: Value, env: *Environment) Error!String.MaybeIntegerString {
+        const ran = try value.run(env);
 
-    //     defer ran.decrement(env.allocator);
-    //     return ran.toStr();
-    // }
+        if (ran.cast(*String)) |str| {
+            return String.MaybeIntegerString{ .string = str };
+        }
+
+        // Only in the error cases do we decrement, as the successful cases are just immediates.
+        errdefer ran.decrement(env.allocator);
+        return ran.toStr();
+    }
 
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
@@ -334,7 +335,78 @@ pub const Value = enum(u64) {
             .block => try writer.print("Block({c})", .{value.cast(*Block).?.function.name}),
         }
     }
+
+    pub fn runDowncast(
+        value: Value,
+        env: *Environment,
+        comptime tys: anytype,
+    ) Error!Downcasted(tys) {
+        const ran = try value.run(env);
+        errdefer ran.decrement(env.allocator);
+        return ran.downcast(tys);
+    }
+
+    pub fn downcast(value: Value, comptime tys: anytype) Error!Downcasted(tys) {
+        inline for (tys) |ty| {
+            if (value.cast(ty)) |casted| {
+                const name = comptime enumFieldNameFor(ty);
+                return @unionInit(Downcasted(tys), name, casted);
+            }
+        }
+
+        return error.InvalidType;
+    }
 };
+
+fn enumFieldNameFor(comptime T: type) []const u8 {
+    return switch (T) {
+        Integer => "integer",
+        bool => "boolean",
+        Null => "null",
+        *String => "string",
+        else => @compileError("invalid type:" ++ @typeName(T)),
+    };
+}
+
+pub fn Downcasted(comptime tys: anytype) type {
+    const ArgsType = @TypeOf(tys);
+
+    if (@typeInfo(ArgsType) != .Struct) {
+        @compileError("Expected tuple or struct argument, found " ++ @typeName(ArgsType));
+    }
+
+    // This variable is needed because there's a bug in the zig compiler.
+    var tmp = std.builtin.Type{ .Union = .{
+        .layout = .Auto,
+        .tag_type = @Type(.{ .Enum = .{
+            .layout = .Auto,
+            .tag_type = std.math.IntFittingRange(0, tys.len),
+            .fields = blk: {
+                var fields: [tys.len]std.builtin.Type.EnumField = undefined;
+
+                inline for (tys) |ty, idx| {
+                    fields[idx] = .{ .name = enumFieldNameFor(ty), .value = idx };
+                }
+
+                break :blk fields[0..];
+            },
+            .decls = &.{},
+            .is_exhaustive = true,
+        } }),
+        .fields = blk: {
+            var fields: [tys.len]std.builtin.Type.UnionField = undefined;
+
+            inline for (tys) |ty, idx| {
+                fields[idx] = .{ .name = enumFieldNameFor(ty), .field_type = ty, .alignment = 0 };
+            }
+
+            break :blk fields[0..];
+        },
+        .decls = &.{},
+    } };
+
+    return @Type(tmp);
+}
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;

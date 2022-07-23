@@ -10,10 +10,15 @@ pub fn main() !void {
     var env = Environment.init(arena.allocator());
     defer env.deinit();
 
-    var program = try knight.play("O + 1 A 'a'", &env);
+    var program = try knight.play(
+        \\; = i 0
+        \\; = sum 0
+        \\; WHILE < i 50
+        \\      ; = sum + sum i
+        \\      : = i + i 1
+        \\: OUTPUT + "SUM(0..50)=" sum
+    , &env); // => prints out `SUM(0..50)=1225`
     defer program.decrement(env.allocator);
-
-    try program.dump(std.io.getStdOut().writer());
 
     // var program = Parser{ .source = "123" }.parse(&env) catch |e| std.debug.panic("error: {s}", .{e});
     // defer program.decrement();

@@ -6,5 +6,11 @@ pub const Error = error{
     InvalidType,
     EmptyString,
     DomainError,
-    OutOfMemory, // todo: union with error?
-} || @import("Parser.zig").Error || std.os.WriteError;
+} || @import("Parser.zig").Error || std.os.WriteError || error{
+    // todo: make all these unions with builtin type somehow
+    OutOfMemory,
+    DivisionByZero,
+    Overflow,
+    NegativeDenominator,
+    Underflow,
+};
