@@ -1,18 +1,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
-const meta = std.meta;
 
-const Error = @import("error.zig").Error;
+const Error = @import("knight.zig").Error;
 const String = @import("String.zig");
 const Environment = @import("Environment.zig");
 const Variable = Environment.Variable;
 const Block = @import("Function.zig").Block;
 
 /// An Integer within Knight. This is specially sized to make use of point tagging.
-pub const Integer = meta.Int(.signed, @bitSizeOf(Value) - @bitSizeOf(Tag));
+pub const Integer = std.meta.Int(.signed, @bitSizeOf(Value) - @bitSizeOf(Tag));
 
-/// A Struct that indicates a null value within Knight.
+/// A struct that indicates a null value within Knight.
 pub const Null = struct {};
 
 /// The alignment of pointers within Knight. This is used to ensure that all tagged pointers
@@ -20,7 +18,7 @@ pub const Null = struct {};
 pub const ptr_align = 8;
 
 /// The tag of a `Value`. Used to indicate the type of a value.
-pub const Tag = enum {
+const Tag = enum {
     const tag_size = std.math.log2(ptr_align);
     const shift = tag_size;
 
@@ -31,8 +29,8 @@ pub const Tag = enum {
     string,
     block,
 
-    fn create(comptime tag: Tag, bits: meta.Tag(Value)) Value {
-        assert(@truncate(meta.Tag(Tag), bits) == 0);
+    fn create(comptime tag: Tag, bits: std.meta.Tag(Value)) Value {
+        std.debug.assert(@truncate(std.meta.Tag(Tag), bits) == 0);
 
         return @intToEnum(Value, bits | @enumToInt(tag));
     }
@@ -130,18 +128,18 @@ pub const Value = enum(u64) {
         };
     }
 
-    fn bits(value: Value) meta.Tag(Value) {
+    fn bits(value: Value) std.meta.Tag(Value) {
         return @enumToInt(value);
     }
 
-    fn untag(value: Value) meta.Tag(Value) {
-        return value.bits() & ~@as(meta.Tag(Value), (1 << Tag.shift) - 1);
+    fn untag(value: Value) std.meta.Tag(Value) {
+        return value.bits() & ~@as(std.meta.Tag(Value), (1 << Tag.shift) - 1);
     }
 
-    pub fn tag(value: Value) Tag {
-        assert(!value.isUndefined());
+    fn tag(value: Value) Tag {
+        std.debug.assert(!value.isUndefined());
 
-        return @intToEnum(Tag, @truncate(meta.Tag(Tag), value.bits()));
+        return @intToEnum(Tag, @truncate(std.meta.Tag(Tag), value.bits()));
     }
 
     pub fn isUndefined(value: Value) bool {
@@ -156,8 +154,8 @@ pub const Value = enum(u64) {
             bool => if (value) Value.@"true" else Value.@"false",
             Null => Value.@"null",
             Integer => val_tag.create(@as(
-                meta.Tag(Value),
-                @bitCast(meta.Int(.unsigned, @bitSizeOf(Value) - @bitSizeOf(Tag)), value),
+                std.meta.Tag(Value),
+                @bitCast(std.meta.Int(.unsigned, @bitSizeOf(Value) - @bitSizeOf(Tag)), value),
             ) << Tag.shift),
             *String, *Variable, *Block => val_tag.create(@ptrToInt(value)),
             else => @compileError("non-Value type given: " ++ @typeName(T)),
@@ -180,7 +178,7 @@ pub const Value = enum(u64) {
         return switch (T) {
             Integer => @intCast(
                 Integer,
-                @bitCast(meta.Int(.signed, @bitSizeOf(Value)), value.bits()) >> Tag.tag_size,
+                @bitCast(std.meta.Int(.signed, @bitSizeOf(Value)), value.bits()) >> Tag.tag_size,
             ),
             bool => value == Value.@"true",
             Null => .{},
@@ -207,6 +205,24 @@ pub const Value = enum(u64) {
         }
     }
 
+    // Returns whether `lhs` is equivalent to `rhs`.
+    pub fn eql(lhs: Value, rhs: Value) bool {
+        // Identical values are equivalent.
+        if (lhs == rhs) return true;
+
+        // If the tags dont match, the values aren't equivalent.
+        if (lhs.tag() != rhs.tag()) return false;
+
+        // Only strings require a downcast.
+        if (lhs.cast(*String)) |string| {
+            const rstring = rhs.cast(*String).?;
+            return std.mem.eql(u8, string.slice(), rstring.slice());
+        }
+
+        // Everything else requires identical values.
+        return false;
+    }
+
     /// Executes the `value`.
     ///
     /// For booleans, strings, null, and integers, it simply returns the value unchanged. For
@@ -219,7 +235,7 @@ pub const Value = enum(u64) {
                 value.cast(*String).?.increment();
                 break :blk value;
             },
-            .variable => value.cast(*Variable).?.fetch(),
+            .variable => value.cast(*Variable).?.fetch() orelse error.UndefinedVariable,
             .block => value.cast(*Block).?.run(env),
         };
     }

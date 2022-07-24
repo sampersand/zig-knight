@@ -5,10 +5,11 @@
 //!
 //! Additionally, to improve performance, all strings are interned, which can be used for improved
 //! variable lookup.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
-const Error = @import("error.zig").Error;
+const Error = @import("knight.zig").Error;
 
 const Environment = @This();
 
@@ -20,30 +21,27 @@ pub const Variable = struct {
     /// The name of the variable. This value is merely borrowed; `Environment.variables` owns it.
     name: []const u8,
 
-    /// The value of the `Variable`. You shouldn't directly access this, instead replace it with
-    /// `Variable.assign` and access it with `Variable.fetch`.
-    value: Value = Value.@"undefined", // `?Value` takes up too much space
+    /// The value of the `Variable`. You shouldn't directly access this; instead, use `.assign` and
+    /// `.fetch`.
+    value: ?Value = null,
 
     /// Associates `value` with `variable`, deinitializing the previous value (if any).
-    pub fn assign(variable: *Variable, allocator: Allocator, value: Value) void {
-        variable.deinit(allocator);
+    pub fn assign(variable: *Variable, alloc: Allocator, value: Value) void {
+        variable.deinit(alloc);
         variable.value = value;
     }
 
-    /// Access the last `Value` that was `.assign`ed to `variable`, returning an `Error` if
-    /// `variable` has yet to be assigned.
-    pub fn fetch(variable: *const Variable) Error!Value {
-        if (variable.value.isUndefined()) {
-            return error.UndefinedVariable;
-        }
-
-        variable.value.increment();
-        return variable.value;
+    /// Access the last `Value` that was `.assign`ed to `variable`, returning `null` if the variable
+    /// hasn't been assigned yet.
+    pub fn fetch(variable: *const Variable) ?Value {
+        const value = variable.value orelse return null;
+        value.increment();
+        return value;
     }
 
-    fn deinit(variable: *Variable, allocator: Allocator) void {
-        if (variable.value != Value.@"undefined") {
-            variable.value.decrement(allocator);
+    fn deinit(variable: *Variable, alloc: Allocator) void {
+        if (variable.value) |value| {
+            value.decrement(alloc);
         }
     }
 };
@@ -61,7 +59,6 @@ allocator: Allocator,
 
 /// A random number generator, used for the `RANDOM` functoin.
 random: std.rand.DefaultPrng,
-
 /// Creates a new `Environment` with the given allocator.
 pub fn init(allocator: Allocator) !Environment {
     var bytes: [@sizeOf(u64)]u8 = undefined;
@@ -117,22 +114,22 @@ test "variable fetching works" {
 
     const v1 = try env.lookup("hello");
     try expectEqualStrings(v1.name, "hello");
-    try expectError(error.UndefinedVariable, v1.fetch());
+    try expectError(null, v1.fetch());
 
     const v2 = try env.lookup("world");
     try expectEqualStrings(v2.name, "world");
-    try expectError(error.UndefinedVariable, v2.fetch());
+    try expectError(null, v2.fetch());
     try expect(v1 != v2);
 
     const v3 = try env.lookup("hello");
     try expectEqual(v1, v3);
     try expectEqualStrings(v1.name, "hello");
-    try expectError(error.UndefinedVariable, v1.fetch());
+    try expectError(null, v1.fetch());
 
     v1.assign(env.allocator, Value.@"true");
     try expectEqualStrings(v1.name, "hello");
     try expectEqual(try v1.fetch(), Value.@"true");
-    try expectError(error.UndefinedVariable, v2.fetch());
+    try expectError(null, v2.fetch());
 
     const Integer = @import("value.zig").Integer;
     (try env.lookup("world")).assign(env.allocator, Value.init(Integer, 34));
