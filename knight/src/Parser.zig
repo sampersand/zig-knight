@@ -70,7 +70,7 @@ fn stripWhitespaceAndComments(parser: *Parser) void {
 }
 
 /// Fetches the next integer from the parser.
-fn nextInteger(parser: *Parser) Error!value.Integer {
+fn nextInteger(parser: *Parser) !value.Integer {
     var x: value.Integer = 0;
 
     while (parser.peek()) |c| {

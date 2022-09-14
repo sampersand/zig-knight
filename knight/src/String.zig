@@ -44,11 +44,14 @@ kind: union(enum) {
 },
 
 /// An empty string.
-const empty = String.nofree("");
+pub var empty = String.noFree("");
 
 /// Create a new `String` which will never be freed.
 pub fn noFree(str: []const u8) String {
-    return .{ .refcount = undefined, .kind = .{ .nofree = str } };
+    return .{
+        .refcount = undefined,
+        .kind = .{ .nofree = str },
+    };
 }
 
 /// Initializes a pre-allocated noFree `String` with `str`.
@@ -58,7 +61,9 @@ pub fn initNoFree(string: *String, str: []const u8) void {
 
 /// Creates a new owned `String`.
 pub fn owned(str: []u8) String {
-    return .{ .kind = .{ .owned = str } };
+    return .{
+        .kind = .{ .owned = str },
+    };
 }
 
 /// Initializes `string` with the owned `str`.
@@ -66,24 +71,49 @@ pub fn initOwned(string: *String, str: []u8) void {
     string.* = owned(str);
 }
 
+/// An issue that can occur whilst initializing.
+pub const InitError = Allocator.Error;
+
 /// Initializes a string, and copies the `str` over to it.
-pub fn initBorrowed(string: *String, alloc: Allocator, str: []const u8) !void {
+pub fn initBorrowed(string: *String, alloc: Allocator, str: []const u8) InitError!void {
     try string.init(alloc, str.len);
     std.mem.copy(u8, string.asMutableSlice(), str);
 }
 
 /// Initializes `string` as a String with enough space to store `capacity` bytes.
-pub fn init(string: *String, alloc: Allocator, capacity: usize) !void {
+pub fn init(string: *String, alloc: Allocator, capacity: usize) InitError!void {
     string.refcount = 1;
 
     if (capacity <= max_embed_length) {
-        string.kind = .{ .embed = .{
-            .len = @intCast(@TypeOf(string.kind.embed.len), capacity),
-            .data = undefined,
-        } };
+        string.kind = .{
+            .embed = .{
+                .len = @intCast(@TypeOf(string.kind.embed.len), capacity),
+                .data = undefined,
+            },
+        };
     } else {
-        string.kind = .{ .owned = try alloc.alloc(u8, capacity) };
+        string.kind = .{
+            .owned = try alloc.alloc(u8, capacity),
+        };
     }
+}
+
+/// The issue that could possibly occur when initializing a substring.
+pub const InitSubstrError = error{OutOfBounds};
+
+/// Initialize a borrowed substring.
+pub fn initSubstr(string: *String, owner: *String, start: usize, length: usize) void {
+    std.debug.print("len={}, start={}, length={}\n", .{ owner.len(), start, length });
+    assert(start + length <= owner.len());
+
+    owner.increment();
+
+    string.kind = .{
+        .substring = .{
+            .data = owner.slice()[start .. start + length],
+            .owner = owner,
+        },
+    };
 }
 
 /// Deinitializes `string`.
@@ -190,36 +220,6 @@ pub fn parseInt(string: *const String) Integer {
     // Parse the string, or if there's an error, it's zero
     return std.fmt.parseInt(Integer, str, 10) catch 0;
 }
-
-// // Get a reference to the original owner. Either `b.owner` for substring strings, else `string`.
-// fn ownerString(s: *String) *String {
-//     return switch (s) {
-//         .substring => |b| b.owner,
-//         else => s,
-//     };
-// }
-
-// /// Creates a new "borrowed" string from `string` from the specified range.
-// /// This will return `null` if the last byte is out of bounds.
-// pub fn substr(string: *String, i: Interner, start: usize, amnt: usize) ?*String {
-//     // TODO: this function doesnt actually work, and needs some refrence to the interner.
-//     if (amnt == 0 or string.len() == 0 or string.len() == start) {
-//         return empty; // If we have an empty string, dont allocate a whole new string.
-//     }
-
-//     if (string.len <= start + amnt) {
-//         return null;
-//     }
-
-//     string.increment();
-
-//     return String{ .kind = .{
-//         .borrowed = .{
-//             .slice = string.slice()[start .. start + amnt],
-//             .owner = string,
-//         },
-//     } };
-// }
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -341,11 +341,34 @@ pub const Interner = struct {
         return string;
     }
 
-    // // TODO: use interner, or borrow from the source code directly.
-    // _ = interner;
-    // var s: String = undefined;
-    // try s.initBorrowed(alloc, );
-    // return s;
+    pub fn repeat(
+        interner: *Interner,
+        alloc: Allocator,
+        source: []const u8,
+        amount: usize,
+    ) Allocator.Error!*String {
+        _ = interner; // TODO, check to see if it already exists.
+
+        var string = try alloc.create(String);
+        errdefer string.deinit(alloc);
+
+        try string.init(alloc, source.len * amount);
+        errdefer string.decrement();
+
+        var i: usize = 0;
+        while (i < amount) : (i += 1) {
+            std.mem.copy(u8, string.asMutableSlice()[i * source.len ..], source);
+        }
+
+        return string;
+    }
+
+    pub fn register(interner: *Interner, alloc: Allocator, string: *String) bool {
+        _ = interner;
+        _ = alloc;
+        _ = string;
+        return false;
+    }
 };
 
 pub const MaybeIntegerString = union(enum) {

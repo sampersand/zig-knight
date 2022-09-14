@@ -19,7 +19,8 @@ pub fn main() anyerror!void {
         \\      ; & (= div5 ! % i 5) OUTPUT "Buzz\"
         \\      : OUTPUT IF (| div3 div5) "" i
         \\; = max 100
-        \\CALL fizzbuzz
+        \\#; CALL fizzbuzz
+        \\: DUMP G "ABC" 0 4
     , &env);
     defer program.decrement(env.allocator);
 

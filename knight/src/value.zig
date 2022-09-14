@@ -83,15 +83,6 @@ pub const Value = enum(u64) {
     /// create a circular dependency. Instead, it's an associated constant.
     pub const @"true" = Tag.constant.create(2 << Tag.shift);
 
-    /// Indicates the absence of a value in Knight.
-    ///
-    /// Instead of using `?Value`, instead you should use `Value.@"undefined"`, as it doesn't
-    /// take up any extra space.
-    ///
-    /// This isn't a variant of `Value` because `Tag` requires the size of `Value`, which would
-    /// create a circular dependency. Instead, it's an associated constant.
-    pub const @"undefined" = Tag.constant.create(3 << Tag.shift);
-
     /// The number zero within Knight.
     ///
     /// This isn't a variant of `Value` because `Tag` requires the size of `Value`, which would
@@ -104,30 +95,6 @@ pub const Value = enum(u64) {
     /// create a circular dependency. Instead, it's an associated constant.
     pub const one = Tag.integer.create(1 << Tag.shift);
 
-    pub const Classification = union(enum) {
-        @"null",
-        boolean: bool,
-        integer: Integer,
-        string: *String,
-        variable: *Variable,
-        block: *Block,
-    };
-
-    pub fn classify(value: Value) Classification {
-        return switch (value.tag()) {
-            .constant => switch (value) {
-                Value.@"true" => Classification{ .boolean = true },
-                Value.@"false" => Classification{ .boolean = false },
-                Value.@"null" => Classification{ .@"null" = {} },
-                else => unreachable,
-            },
-            .integer => .{ .integer = value.cast(Integer).? },
-            .string => .{ .string = value.cast(*String).? },
-            .variable => .{ .variable = value.cast(*Variable).? },
-            .block => .{ .block = value.cast(*Block).? },
-        };
-    }
-
     fn bits(value: Value) std.meta.Tag(Value) {
         return @enumToInt(value);
     }
@@ -137,13 +104,7 @@ pub const Value = enum(u64) {
     }
 
     fn tag(value: Value) Tag {
-        std.debug.assert(!value.isUndefined());
-
         return @intToEnum(Tag, @truncate(std.meta.Tag(Tag), value.bits()));
-    }
-
-    pub fn isUndefined(value: Value) bool {
-        return value == Value.@"undefined";
     }
 
     /// Creates a new `Value` of type `T`. (For a list of types, cf `Value` docs).
@@ -240,6 +201,10 @@ pub const Value = enum(u64) {
         };
     }
 
+    /// Runs `value`, then converts the return type to an `Integer`.
+    ///
+    /// This is just a convenience function essentially wrapping `.run` and `.toInt`, `decrementing`
+    /// the return value of `.run`.
     pub fn runToInt(value: Value, env: *Environment) Error!Integer {
         const ran = try value.run(env);
         if (ran.cast(Integer)) |integer| return integer;
@@ -248,7 +213,10 @@ pub const Value = enum(u64) {
         return ran.toInt();
     }
 
-    /// Convenience wrapper around `(try value.run(env)).toBool()`.
+    /// Runs `value`, then converts the return type to a `bool`.
+    ///
+    /// This is just a convenience function essentially wrapping `.run` and `.toInt`, `decrementing`
+    /// the return value of `.run`.
     pub fn runToBool(value: Value, env: *Environment) Error!bool {
         const ran = try value.run(env);
         if (ran.cast(bool)) |boolean| return boolean;
@@ -257,31 +225,28 @@ pub const Value = enum(u64) {
         return ran.toBool();
     }
 
-    // /// note that this does claim ownership of the string.
+    /// Runs `value`, then converts the return type to an `String`.
+    ///
+    /// This will always return an owned `String.MaybeIntegerString`; you must `.decrement()` it
+    /// after.
+    ///
+    /// This is just a convenience function essentially wrapping `.run` and `.toInt`, `decrementing`
+    /// the return value of `.run`.
     pub fn runToStr(value: Value, env: *Environment) Error!String.MaybeIntegerString {
         const ran = try value.run(env);
-
-        if (ran.cast(*String)) |str| {
-            return String.MaybeIntegerString{ .string = str };
-        }
+        if (ran.cast(*String)) |str| return String.MaybeIntegerString{ .string = str };
 
         // Only in the error cases do we decrement, as the successful cases are just immediates.
         errdefer ran.decrement(env.allocator);
         return ran.toStr();
     }
 
-    pub fn runTo(value: Value, comptime T: type, env: *Environment) Error!T {
-        const ran = try value.run(env);
-
-        if (value.cast(T)) |t| return t;
-
-        defer ran.decrement(env.allocator);
-        return ran.to(T);
-    }
+    /// The error that is returned when a conversion is attempted on an invalid type.
+    pub const ConversionError = error{InvalidConversion};
 
     /// Converts `value` to an `Integer`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
-    pub fn toInt(value: Value) Error!Integer {
+    pub fn toInt(value: Value) ConversionError!Integer {
         return switch (value.tag()) {
             .constant => @boolToInt(value == Value.@"true"),
             .integer => value.cast(Integer).?,
@@ -292,9 +257,9 @@ pub const Value = enum(u64) {
 
     /// Converts `value` to an `bool`, as per the Knight spec. For types without a conversion
     /// defined, `InvalidConversion` is returned.
-    pub fn toBool(value: Value) Error!bool {
-        // OPTIMIZATION: You could just check to see if the value is `<= Value.zero.bits()`, or
-        // if it's the empty string.
+    pub fn toBool(value: Value) ConversionError!bool {
+        // Potential Optimization: You could just check to see if the value is
+        // `<= Value.zero.bits()`, or if it's the empty string.
         return switch (value.tag()) {
             .constant => value == Value.@"true",
             .integer => value.cast(Integer).? != 0,
@@ -308,7 +273,7 @@ pub const Value = enum(u64) {
     ///
     /// Note that this doesn't actually allocate anything or increment any `String`s refcount. If
     /// you want a `*String`, you'll need to call `.toString` on the resulting `MaybeIntegerString`.
-    pub fn toStr(value: Value) Error!String.MaybeIntegerString {
+    pub fn toStr(value: Value) ConversionError!String.MaybeIntegerString {
         const strings = struct {
             var true_string = String.noFree("true");
             var false_string = String.noFree("false");
@@ -329,16 +294,12 @@ pub const Value = enum(u64) {
                 Value.one => String.MaybeIntegerString{ .string = &strings.one_string },
                 else => String.MaybeIntegerString.integerSlice(value.cast(Integer).?),
             },
-            .string => blk: {
-                var string = value.cast(*String).?;
-                string.increment();
-                break :blk .{ .string = string };
-            },
+            .string => String.MaybeIntegerString{ .string = value.cast(*String).? },
             else => error.InvalidConversion,
         };
     }
 
-    pub fn dump(value: Value, writer: anytype) !void {
+    pub fn dump(value: Value, writer: anytype) std.os.WriteError!void {
         switch (value.tag()) {
             .constant => switch (value) {
                 Value.@"true" => try writer.print("Boolean(true)", .{}),
@@ -352,78 +313,7 @@ pub const Value = enum(u64) {
             .block => try writer.print("Block({c})", .{value.cast(*Block).?.function.name}),
         }
     }
-
-    pub fn runDowncast(
-        value: Value,
-        env: *Environment,
-        comptime Ts: anytype,
-    ) Error!Downcasted(Ts) {
-        const ran = try value.run(env);
-        errdefer ran.decrement(env.allocator);
-        return ran.only(Ts, error.InvalidType);
-    }
-
-    pub fn only(value: Value, comptime Ts: anytype, comptime err: anytype) !Downcasted(Ts) {
-        inline for (Ts) |ty| {
-            if (value.cast(ty)) |casted| {
-                const name = comptime enumFieldNameFor(ty);
-                return @unionInit(Downcasted(Ts), name, casted);
-            }
-        }
-
-        return err;
-    }
 };
-
-fn enumFieldNameFor(comptime T: type) []const u8 {
-    return switch (T) {
-        Integer => "integer",
-        bool => "boolean",
-        Null => "null",
-        *String => "string",
-        else => @compileError("invalid type:" ++ @typeName(T)),
-    };
-}
-
-pub fn Downcasted(comptime Ts: anytype) type {
-    const ArgsType = @TypeOf(Ts);
-
-    if (@typeInfo(ArgsType) != .Struct) {
-        @compileError("Expected tuple or struct argument, found " ++ @typeName(ArgsType));
-    }
-
-    // This variable is needed because there's a bug in the zig compiler.
-    var tmp = std.builtin.Type{ .Union = .{
-        .layout = .Auto,
-        .tag_type = @Type(.{ .Enum = .{
-            .layout = .Auto,
-            .tag_type = std.math.IntFittingRange(0, Ts.len),
-            .fields = blk: {
-                var fields: [Ts.len]std.builtin.Type.EnumField = undefined;
-
-                inline for (Ts) |ty, idx| {
-                    fields[idx] = .{ .name = enumFieldNameFor(ty), .value = idx };
-                }
-
-                break :blk fields[0..];
-            },
-            .decls = &.{},
-            .is_exhaustive = true,
-        } }),
-        .fields = blk: {
-            var fields: [Ts.len]std.builtin.Type.UnionField = undefined;
-
-            inline for (Ts) |ty, idx| {
-                fields[idx] = .{ .name = enumFieldNameFor(ty), .field_type = ty, .alignment = 0 };
-            }
-
-            break :blk fields[0..];
-        },
-        .decls = &.{},
-    } };
-
-    return @Type(tmp);
-}
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;

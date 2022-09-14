@@ -9,7 +9,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
-const Error = @import("knight.zig").Error;
 
 const Environment = @This();
 
@@ -59,8 +58,12 @@ allocator: Allocator,
 
 /// A random number generator, used for the `RANDOM` functoin.
 random: std.rand.DefaultPrng,
+
+/// The error that `.init` can return.
+pub const InitError = std.os.GetRandomError;
+
 /// Creates a new `Environment` with the given allocator.
-pub fn init(allocator: Allocator) !Environment {
+pub fn init(allocator: Allocator) InitError!Environment {
     var bytes: [@sizeOf(u64)]u8 = undefined;
     try std.os.getrandom(&bytes);
 
@@ -70,9 +73,12 @@ pub fn init(allocator: Allocator) !Environment {
     };
 }
 
+/// The error that `.lookup` can return.
+pub const LookupError = Allocator.Error;
+
 /// Fetches the variable identified by `name`; If no such variable exists, one will be created.
 /// Note that `name` must be a borrowed slice.
-pub fn lookup(env: *Environment, name: []const u8) Allocator.Error!*Variable {
+pub fn lookup(env: *Environment, name: []const u8) LookupError!*Variable {
     var entry = try env.variables.getOrPut(env.allocator, name);
 
     if (!entry.found_existing) {

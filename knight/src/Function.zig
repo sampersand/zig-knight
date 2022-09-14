@@ -86,11 +86,36 @@ const function_C = Function{
     }.fun,
 };
 
+pub fn execute(command: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var arguments: [][]const u8 = try allocator.alloc([]const u8, std.mem.count(u8, command, " ") + 1);
+    defer allocator.free(arguments);
+
+    var arg_iter = std.mem.tokenize(u8, command, " ");
+    var arg_index: usize = 0;
+
+    while (arg_iter.next()) |arg| {
+        arguments[arg_index] = arg;
+        arg_index += 1;
+    }
+
+    var exec_result = try std.ChildProcess.exec(.{
+        .allocator = allocator,
+        .argv = arguments,
+    });
+    allocator.free(exec_result.stderr);
+    return exec_result.stdout;
+}
+
 const @"function_`" = Function{
     .name = '`',
     .arity = 1,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) !Value {
+            const cmd = try args[0].runToStr(env);
+            defer cmd.decrement();
+
+            const child = std.ChildProcesss.init(cmd.slice(), env.allocator);
+
             _ = args;
             _ = env;
             std.debug.todo("this function");
@@ -259,9 +284,29 @@ const @"function_*" = Function{
     .arity = 2,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) !Value {
-            _ = args;
-            _ = env;
-            std.debug.todo("this function");
+            const lhs = try args[0].run(env);
+
+            if (lhs.cast(Integer)) |integer| {
+                return Value.init(Integer, integer * try args[1].runToInt(env));
+            }
+
+            defer lhs.decrement(env.allocator);
+
+            if (lhs.cast(*String)) |string| {
+                const uncast_amount = try args[1].runToInt(env);
+                const amount = std.math.cast(usize, uncast_amount) orelse return error.DomainError;
+
+                if (amount == 0) return Value.init(*String, &String.empty);
+                if (amount == 1) {
+                    string.increment();
+                    return lhs;
+                }
+
+                const repetition = try env.interner.repeat(env.allocator, string.slice(), amount);
+                return Value.init(*String, repetition);
+            }
+
+            return error.InvalidType;
         }
     }.fun,
 };
@@ -402,7 +447,6 @@ const @"function_&" = Function{
             const lhs = try args[0].run(env);
             defer lhs.decrement(env.allocator);
 
-            // `eql` must be a non-error and `true`.
             if (!try lhs.toBool()) {
                 lhs.increment();
                 return lhs;
@@ -421,7 +465,6 @@ const @"function_|" = Function{
             const lhs = try args[0].run(env);
             defer lhs.decrement(env.allocator);
 
-            // `eql` must be a non-error and `true`.
             if (try lhs.toBool()) {
                 lhs.increment();
                 return lhs;
@@ -492,16 +535,28 @@ const function_G = Function{
     .arity = 3,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) !Value {
-            const str = try args[0].runToStr(env);
-            defer str.decrement();
+            const cast = std.math.cast;
 
-            const start = try args[1].runToInt(env);
-            const length = try args[1].runToInt(env);
+            const string = try args[0].runToStr(env);
+            defer string.decrement();
 
-            _ = start;
-            _ = length;
-            std.debug.todo("G");
-            // return Value.init(*String, str.substr(env.allocator, start, length));
+            const start = cast(usize, try args[1].runToInt(env)) orelse return error.DomainError;
+            const length = cast(usize, try args[2].runToInt(env)) orelse return error.DomainError;
+
+            if (string.slice().len < start + length) {
+                return error.OutOfBounds;
+            }
+
+            var substr = try env.allocator.create(String);
+            switch (string) {
+                .string => |s| substr.initSubstr(s, start, length),
+                .integer => |i| try substr.initBorrowed(env.allocator, i.slice()),
+            }
+
+            // If there's an error with the allocator, we don't care, we just dont cache.
+            _ = env.interner.register(env.allocator, substr);
+
+            return Value.init(*String, substr);
         }
     }.fun,
 };
@@ -511,9 +566,31 @@ const function_S = Function{
     .arity = 4,
     .function = struct {
         fn fun(args: [*]const Value, env: *Environment) !Value {
-            _ = args;
-            _ = env;
-            std.debug.todo("this function");
+            const cast = std.math.cast;
+
+            const string = try args[0].runToStr(env);
+            defer string.decrement();
+
+            const start = cast(usize, try args[1].runToInt(env)) orelse return error.DomainError;
+            const length = cast(usize, try args[2].runToInt(env)) orelse return error.DomainError;
+
+            const replacement = try args[0].runToStr(env);
+            defer replacement.decrement();
+
+            if (string.slice().len < start + length) {
+                return error.OutOfBounds;
+            }
+
+            var substr = try env.allocator.create(String);
+            switch (string) {
+                .string => |s| substr.initSubstr(s, start, length),
+                .integer => |i| try substr.initBorrowed(env.allocator, i.slice()),
+            }
+
+            // If there's an error with the allocator, we don't care, we just dont cache.
+            _ = env.interner.register(env.allocator, substr);
+
+            return Value.init(*String, substr);
         }
     }.fun,
 };

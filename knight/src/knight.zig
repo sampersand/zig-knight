@@ -10,7 +10,8 @@ pub const Error = error{
     InvalidType,
     EmptyString,
     DomainError,
-} || Parser.Error || std.os.WriteError || error{
+    OutOfBounds,
+} || Parser.Error || error{
     // todo: make all these unions with builtin type somehow
     OutOfMemory,
     DivisionByZero,
@@ -18,7 +19,7 @@ pub const Error = error{
     NegativeDenominator,
     Underflow,
     StreamTooLong,
-} || std.os.Error || std.os.ConnectError || std.os.ReadError || std.os.WriteError;
+} || std.os.OpenError || std.os.ConnectError || std.os.ReadError || std.os.WriteError;
 
 pub fn play(source: []const u8, env: *Environment) Error!Value {
     var program = try (Parser{ .source = source }).next(env);
